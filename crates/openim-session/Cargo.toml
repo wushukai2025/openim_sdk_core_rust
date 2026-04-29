@@ -1,0 +1,11 @@
+[package]
+name = "openim-session"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+openim-domain = { path = "../openim-domain" }
+openim-errors = { path = "../openim-errors" }
+openim-types = { path = "../openim-types" }

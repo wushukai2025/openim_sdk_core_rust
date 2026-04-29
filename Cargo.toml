@@ -3,6 +3,7 @@ members = [
     "crates/openim-errors",
     "crates/openim-domain",
     "crates/openim-protocol",
+    "crates/openim-session",
     "crates/openim-storage-core",
     "crates/openim-storage-indexeddb",
     "crates/openim-storage-sqlite",
