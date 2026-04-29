@@ -1,5 +1,7 @@
+pub mod conversation;
 pub mod file;
 pub mod group;
+pub mod message;
 pub mod relation;
 pub mod user;
 

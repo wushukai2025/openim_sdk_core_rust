@@ -1,7 +1,10 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use openim_domain::{group::GroupService, relation::RelationService, user::UserService};
+use openim_domain::{
+    conversation::ConversationService, group::GroupService, message::MessageService,
+    relation::RelationService, user::UserService,
+};
 use openim_errors::{OpenImError, Result};
 use openim_storage_core::{openim_db_file, openim_indexeddb_name};
 use openim_transport_core::TransportConfig;
@@ -128,6 +131,8 @@ pub struct DomainServices {
     pub users: UserService,
     pub relations: RelationService,
     pub groups: GroupService,
+    pub messages: MessageService,
+    pub conversations: ConversationService,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
