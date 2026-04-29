@@ -15,12 +15,15 @@ a:has(code[data-code-ref]) {
 
 ## 结论
 
-Phase 4 已启动并完成第一批传输层拆包：workspace 增加 transport-core、transport-native、transport-wasm 三个 crate，原有 transport crate 改为兼容 facade。当前已通过 native workspace 回归和 wasm32 编译检查，但浏览器真实 WebSocket 断线、重连、前后台切换自动化 Gate 尚未执行，因此 Phase 4 Gate 不能标记为全部通过。
+Phase 4 已完成传输层拆包、native 本地 WebSocket 收发和重连测试、wasm32 编译检查，以及浏览器内 wasm WebSocket send、receive、push 和断线重连自动化验证。当前仍缺少真实 OpenIM server 地址、账号和 token，真实服务端兼容收发与前后台服务端行为尚未执行，因此 Phase 4 Gate 仍不能标记为全部通过。
 
 ## Rust 落地点
 
 - workspace 已加入 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase4-workspace-transport-members">openim-transport-core</code>、openim-transport-native 和 openim-transport-wasm，保持传输核心、原生实现和浏览器实现的物理边界。
 <!-- code-ref: phase4-workspace-transport-members -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/Cargo.toml#L10 -->
+
+- workspace 已加入 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase4-transport-fixture-member">transport-fixture</code>，用于给浏览器 wasm 测试提供本地 WebSocket 服务端。
+<!-- code-ref: phase4-transport-fixture-member -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/Cargo.toml#L16 -->
 
 - facade 继续导出 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase4-facade-export">OpenImWsClient</code> 与 ClientConfig，保证 protocol-spike 的现有导入路径不变。
 <!-- code-ref: phase4-facade-export -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-transport/src/lib.rs#L1 -->
@@ -62,13 +65,28 @@ Phase 4 已启动并完成第一批传输层拆包：workspace 增加 transport-
 <!-- code-ref: phase4-wasm-client -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-transport-wasm/src/wasm.rs#L27 -->
 
 - transport-wasm 的 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase4-wasm-handlers">install_handlers</code> 持有 WebSocket 回调闭包，避免浏览器事件处理器被 Rust 提前释放。
-<!-- code-ref: phase4-wasm-handlers -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-transport-wasm/src/wasm.rs#L181 -->
+<!-- code-ref: phase4-wasm-handlers -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-transport-wasm/src/wasm.rs#L227 -->
+
+- transport-wasm 的 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase4-wasm-reconnect">reconnect</code> 使用相同配置重建 WebSocket，替换事件队列和浏览器回调闭包，并清空 pending 请求。
+<!-- code-ref: phase4-wasm-reconnect -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-transport-wasm/src/wasm.rs#L71 -->
+
+- transport-wasm 的 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase4-wasm-open-socket">open_socket</code> 在等待 open 前先安装 message、error 和 close handler，避免服务端初始 ACK 首帧竞态。
+<!-- code-ref: phase4-wasm-open-socket -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-transport-wasm/src/wasm.rs#L188 -->
 
 - native 集成测试 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase4-native-route-test">native_client_routes_response_push_and_text_heartbeat</code> 启动本地 WebSocket fixture，覆盖文本心跳、请求响应关联和推送转发。
 <!-- code-ref: phase4-native-route-test -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-transport-native/src/lib.rs#L246 -->
 
 - native 集成测试 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase4-native-reconnect-test">native_client_reconnects_after_disconnect</code> 覆盖首连接断开后通过 reconnect 重新建连并完成请求响应。
 <!-- code-ref: phase4-native-reconnect-test -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-transport-native/src/lib.rs#L286 -->
+
+- wasm 浏览器测试 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase4-wasm-browser-test">wasm_client_routes_response_push_and_reconnects</code> 覆盖浏览器 WebSocket 文本心跳、二进制请求响应、push 转发、断线事件和 reconnect 后继续收发。
+<!-- code-ref: phase4-wasm-browser-test -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-transport-wasm/src/wasm.rs#L296 -->
+
+- <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase4-transport-fixture-main">transport-fixture</code> 提供本地 WebSocket fixture，按请求 msgIncr 回写响应、发送 push，并可按测试请求主动 close 连接。
+<!-- code-ref: phase4-transport-fixture-main -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/tools/transport-fixture/src/main.rs#L8 -->
+
+- native 真实服务端兼容测试 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase4-real-server-compat-test">real_openim_server_get_newest_seq_round_trips</code> 已落为 ignored 测试，需要通过环境变量传入真实 OpenIM server 连接信息后执行。
+<!-- code-ref: phase4-real-server-compat-test -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-transport-native/tests/openim_server_compat.rs#L10 -->
 
 ## 验证命令
 
@@ -88,8 +106,28 @@ cargo test --workspace
 cargo check -p openim-transport-wasm --target wasm32-unknown-unknown
 ```
 
+```bash
+cargo run -p transport-fixture -- 127.0.0.1:19081
+```
+
+```bash
+NO_HEADLESS=1 cargo test -p openim-transport-wasm --target wasm32-unknown-unknown
+```
+
+随后使用 Playwright 缓存中的 headless Chromium 打开测试页，并通过 DevTools Protocol 读取页面测试结果：
+
+```text
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 filtered out; finished in 0.02s
+```
+
+真实 OpenIM server 兼容测试入口如下，当前本机未提供真实服务端凭据，因此该项没有执行：
+
+```bash
+OPENIM_WS_ADDR=... OPENIM_USER_ID=... OPENIM_TOKEN=... cargo test -p openim-transport-native --test openim_server_compat -- --ignored
+```
+
 ## Gate 状态
 
-当前已完成：传输层三 crate 拆分、旧 facade 兼容导出、连接 URL 行为保持、JSON 与 gzip payload 复用、文本心跳 ping 到 pong、native 请求登记与响应关联、native 推送转发、native 接收超时事件、native 重连入口、本地 WebSocket 断线重连测试、wasm WebSocket 编译通过、workspace 回归通过。
+当前已完成：传输层三 crate 拆分、旧 facade 兼容导出、连接 URL 行为保持、JSON 与 gzip payload 复用、文本心跳 ping 到 pong、native 请求登记与响应关联、native 推送转发、native 接收超时事件、native 重连入口、本地 WebSocket 断线重连测试、wasm WebSocket 编译通过、wasm 浏览器 WebSocket send 和 receive 自动化执行、wasm 断线重连策略接入与自动化验证、workspace 回归通过。
 
-当前未完成：浏览器真实 WebSocket send 和 receive 自动化执行、wasm 断线重连策略接入、前后台切换基础场景测试、真实 OpenIM server 兼容收发回归。因此 Phase 4 仍处于进行中，不能标记 Gate 全部通过。
+当前未完成：真实 OpenIM server 兼容收发回归、真实服务端下的前后台切换行为验证。因此 Phase 4 仍处于进行中，不能标记 Gate 全部通过。
