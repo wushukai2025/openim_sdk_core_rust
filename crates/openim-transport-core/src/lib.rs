@@ -5,7 +5,7 @@ use anyhow::{anyhow, Context, Result};
 use openim_protocol::{
     constants::{GZIP_COMPRESSION, PHASE1_SDK_VERSION, SDK_TYPE_JS},
     decode_json_response, encode_json_request, gen_msg_incr, gen_operation_id, gzip_compress,
-    gzip_decompress, GeneralWsReq, GeneralWsResp, GetMaxSeqReq, WsReqIdentifier,
+    gzip_decompress, pb_msg, pb_sdkws, GeneralWsReq, GeneralWsResp, GetMaxSeqReq, WsReqIdentifier,
 };
 use prost::Message as ProstMessage;
 use serde::Deserialize;
@@ -254,19 +254,113 @@ pub fn build_get_newest_seq_request(config: &TransportConfig) -> Result<(General
     let req = GetMaxSeqReq {
         user_id: config.user_id.clone(),
     };
-    let mut data = Vec::new();
-    req.encode(&mut data)?;
+    build_protobuf_request(config, WsReqIdentifier::GetNewestSeq, &req)
+}
 
-    let msg_incr = gen_msg_incr(&config.user_id);
-    let envelope = GeneralWsReq::new(
-        WsReqIdentifier::GetNewestSeq,
-        config.user_id.clone(),
-        config.operation_id.clone(),
-        msg_incr.clone(),
-        data,
-    );
+pub fn build_send_msg_request(
+    config: &TransportConfig,
+    msg: pb_sdkws::MsgData,
+) -> Result<(GeneralWsReq, String)> {
+    build_protobuf_request(config, WsReqIdentifier::SendMsg, &msg)
+}
 
-    Ok((envelope, msg_incr))
+pub fn build_pull_msg_by_range_request(
+    config: &TransportConfig,
+    seq_ranges: Vec<pb_sdkws::SeqRange>,
+    order: pb_sdkws::PullOrder,
+) -> Result<(GeneralWsReq, String)> {
+    let req = pb_sdkws::PullMessageBySeqsReq {
+        user_id: config.user_id.clone(),
+        seq_ranges,
+        order: order as i32,
+    };
+    build_protobuf_request(config, WsReqIdentifier::PullMsgByRange, &req)
+}
+
+pub fn build_pull_msg_by_seq_list_request(
+    config: &TransportConfig,
+    conversations: Vec<pb_msg::ConversationSeqs>,
+    order: pb_sdkws::PullOrder,
+) -> Result<(GeneralWsReq, String)> {
+    let req = pb_msg::GetSeqMessageReq {
+        user_id: config.user_id.clone(),
+        conversations,
+        order: order as i32,
+    };
+    build_protobuf_request(config, WsReqIdentifier::PullMsgBySeqList, &req)
+}
+
+pub fn build_get_conversations_has_read_and_max_seq_request(
+    config: &TransportConfig,
+    conversation_ids: Vec<String>,
+    return_pinned: bool,
+) -> Result<(GeneralWsReq, String)> {
+    let req = pb_msg::GetConversationsHasReadAndMaxSeqReq {
+        user_id: config.user_id.clone(),
+        conversation_i_ds: conversation_ids,
+        return_pinned,
+    };
+    build_protobuf_request(config, WsReqIdentifier::GetConvMaxReadSeq, &req)
+}
+
+pub fn build_pull_conversation_last_message_request(
+    config: &TransportConfig,
+    conversation_ids: Vec<String>,
+) -> Result<(GeneralWsReq, String)> {
+    let req = pb_msg::GetLastMessageReq {
+        user_id: config.user_id.clone(),
+        conversation_i_ds: conversation_ids,
+    };
+    build_protobuf_request(config, WsReqIdentifier::PullConvLastMessage, &req)
+}
+
+pub fn ensure_success_response(resp: &GeneralWsResp) -> Result<()> {
+    if resp.err_code == 0 {
+        return Ok(());
+    }
+
+    Err(anyhow!(
+        "websocket response error: identifier={} code={} msg={}",
+        resp.req_identifier,
+        resp.err_code,
+        resp.err_msg
+    ))
+}
+
+pub fn decode_response_data<M>(resp: &GeneralWsResp) -> Result<M>
+where
+    M: ProstMessage + Default,
+{
+    ensure_success_response(resp)?;
+    M::decode(resp.data.as_slice()).context("decode websocket protobuf response data failed")
+}
+
+pub fn decode_send_msg_response(resp: &GeneralWsResp) -> Result<pb_msg::SendMsgResp> {
+    decode_response_data(resp)
+}
+
+pub fn decode_pull_msg_by_range_response(
+    resp: &GeneralWsResp,
+) -> Result<pb_sdkws::PullMessageBySeqsResp> {
+    decode_response_data(resp)
+}
+
+pub fn decode_pull_msg_by_seq_list_response(
+    resp: &GeneralWsResp,
+) -> Result<pb_msg::GetSeqMessageResp> {
+    decode_response_data(resp)
+}
+
+pub fn decode_get_conversations_has_read_and_max_seq_response(
+    resp: &GeneralWsResp,
+) -> Result<pb_msg::GetConversationsHasReadAndMaxSeqResp> {
+    decode_response_data(resp)
+}
+
+pub fn decode_pull_conversation_last_message_response(
+    resp: &GeneralWsResp,
+) -> Result<pb_msg::GetLastMessageResp> {
+    decode_response_data(resp)
 }
 
 pub fn route_envelope(resp: GeneralWsResp, pending: &mut PendingRequests) -> TransportEvent {
@@ -310,6 +404,29 @@ fn ensure_connect_ack(response: ApiResponse) -> Result<()> {
         response.err_msg,
         response.err_detail
     ))
+}
+
+fn build_protobuf_request<M>(
+    config: &TransportConfig,
+    req_identifier: WsReqIdentifier,
+    message: &M,
+) -> Result<(GeneralWsReq, String)>
+where
+    M: ProstMessage,
+{
+    let mut data = Vec::new();
+    message.encode(&mut data)?;
+
+    let msg_incr = gen_msg_incr(&config.user_id);
+    let envelope = GeneralWsReq::new(
+        req_identifier,
+        config.user_id.clone(),
+        config.operation_id.clone(),
+        msg_incr.clone(),
+        data,
+    );
+
+    Ok((envelope, msg_incr))
 }
 
 #[cfg(test)]
@@ -400,5 +517,148 @@ mod tests {
             Some(Duration::from_millis(250))
         );
         assert_eq!(policy.delay_for_attempt(4), None);
+    }
+
+    #[test]
+    fn send_msg_request_uses_generated_msg_data_payload() {
+        let config = test_config();
+        let (req, msg_incr) = build_send_msg_request(
+            &config,
+            pb_sdkws::MsgData {
+                send_id: "u1".to_string(),
+                recv_id: "u2".to_string(),
+                client_msg_id: "client-1".to_string(),
+                content: b"hello".to_vec(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let decoded = pb_sdkws::MsgData::decode(req.data.as_slice()).unwrap();
+
+        assert_eq!(req.req_identifier, WsReqIdentifier::SendMsg.as_i32());
+        assert_eq!(req.operation_id, "op1");
+        assert_eq!(req.msg_incr, msg_incr);
+        assert_eq!(decoded.send_id, "u1");
+        assert_eq!(decoded.recv_id, "u2");
+        assert_eq!(decoded.content, b"hello".to_vec());
+    }
+
+    #[test]
+    fn pull_msg_by_range_request_matches_msggateway_payload() {
+        let config = test_config();
+        let (req, _) = build_pull_msg_by_range_request(
+            &config,
+            vec![pb_sdkws::SeqRange {
+                conversation_id: "si_u1_u2".to_string(),
+                begin: 1,
+                end: 10,
+                num: 20,
+            }],
+            pb_sdkws::PullOrder::Desc,
+        )
+        .unwrap();
+
+        let decoded = pb_sdkws::PullMessageBySeqsReq::decode(req.data.as_slice()).unwrap();
+
+        assert_eq!(req.req_identifier, WsReqIdentifier::PullMsgByRange.as_i32());
+        assert_eq!(decoded.user_id, "u1");
+        assert_eq!(decoded.seq_ranges[0].conversation_id, "si_u1_u2");
+        assert_eq!(decoded.order, pb_sdkws::PullOrder::Desc as i32);
+    }
+
+    #[test]
+    fn pull_msg_by_seq_list_request_matches_msggateway_payload() {
+        let config = test_config();
+        let (req, _) = build_pull_msg_by_seq_list_request(
+            &config,
+            vec![pb_msg::ConversationSeqs {
+                conversation_id: "si_u1_u2".to_string(),
+                seqs: vec![2, 3, 5],
+            }],
+            pb_sdkws::PullOrder::Asc,
+        )
+        .unwrap();
+
+        let decoded = pb_msg::GetSeqMessageReq::decode(req.data.as_slice()).unwrap();
+
+        assert_eq!(
+            req.req_identifier,
+            WsReqIdentifier::PullMsgBySeqList.as_i32()
+        );
+        assert_eq!(decoded.user_id, "u1");
+        assert_eq!(decoded.conversations[0].seqs, vec![2, 3, 5]);
+        assert_eq!(decoded.order, pb_sdkws::PullOrder::Asc as i32);
+    }
+
+    #[test]
+    fn conversation_seq_requests_use_generated_msg_payloads() {
+        let config = test_config();
+        let (read_req, _) = build_get_conversations_has_read_and_max_seq_request(
+            &config,
+            vec!["si_u1_u2".to_string()],
+            true,
+        )
+        .unwrap();
+        let (last_msg_req, _) =
+            build_pull_conversation_last_message_request(&config, vec!["g_group1".to_string()])
+                .unwrap();
+
+        let read_decoded =
+            pb_msg::GetConversationsHasReadAndMaxSeqReq::decode(read_req.data.as_slice()).unwrap();
+        let last_msg_decoded =
+            pb_msg::GetLastMessageReq::decode(last_msg_req.data.as_slice()).unwrap();
+
+        assert_eq!(
+            read_req.req_identifier,
+            WsReqIdentifier::GetConvMaxReadSeq.as_i32()
+        );
+        assert_eq!(read_decoded.conversation_i_ds, vec!["si_u1_u2"]);
+        assert!(read_decoded.return_pinned);
+        assert_eq!(
+            last_msg_req.req_identifier,
+            WsReqIdentifier::PullConvLastMessage.as_i32()
+        );
+        assert_eq!(last_msg_decoded.conversation_i_ds, vec!["g_group1"]);
+    }
+
+    #[test]
+    fn decode_response_data_checks_error_and_decodes_protobuf() {
+        let mut data = Vec::new();
+        pb_msg::SendMsgResp {
+            server_msg_id: "server-1".to_string(),
+            client_msg_id: "client-1".to_string(),
+            send_time: 123,
+            modify: None,
+        }
+        .encode(&mut data)
+        .unwrap();
+
+        let resp = GeneralWsResp {
+            req_identifier: WsReqIdentifier::SendMsg.as_i32(),
+            err_code: 0,
+            err_msg: String::new(),
+            msg_incr: "msg-1".to_string(),
+            operation_id: "op1".to_string(),
+            data,
+        };
+        let decoded = decode_send_msg_response(&resp).unwrap();
+
+        assert_eq!(decoded.server_msg_id, "server-1");
+        assert_eq!(decoded.client_msg_id, "client-1");
+        assert_eq!(decoded.send_time, 123);
+
+        let err = GeneralWsResp {
+            err_code: 100,
+            err_msg: "failed".to_string(),
+            ..resp
+        };
+        assert!(decode_send_msg_response(&err).is_err());
+    }
+
+    fn test_config() -> TransportConfig {
+        let mut config = TransportConfig::new("ws://example.com/msg_gateway", "u1", "token", 5);
+        config.operation_id = "op1".to_string();
+        config
     }
 }

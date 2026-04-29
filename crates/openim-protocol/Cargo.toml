@@ -12,3 +12,7 @@ openim-errors = { path = "../openim-errors" }
 prost.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+
+[build-dependencies]
+prost-build = "0.13"
+protoc-bin-vendored = "3.2.0"

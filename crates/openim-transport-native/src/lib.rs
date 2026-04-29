@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
@@ -24,6 +25,7 @@ pub struct NativeWsClient {
     config: TransportConfig,
     stream: WsStream,
     pending: PendingRequests,
+    buffered_events: VecDeque<TransportEvent>,
     started_at: Instant,
 }
 
@@ -39,6 +41,7 @@ impl NativeWsClient {
             config,
             stream,
             pending: PendingRequests::default(),
+            buffered_events: VecDeque::new(),
             started_at: Instant::now(),
         })
     }
@@ -98,6 +101,7 @@ impl NativeWsClient {
                     }
                     self.stream = stream;
                     self.pending.clear();
+                    self.buffered_events.clear();
                     self.started_at = Instant::now();
                     return Ok(());
                 }
@@ -126,6 +130,56 @@ impl NativeWsClient {
         Ok(())
     }
 
+    pub async fn send_request_wait_response(
+        &mut self,
+        req: &GeneralWsReq,
+        duration: Duration,
+    ) -> Result<GeneralWsResp> {
+        let msg_incr = req.msg_incr.clone();
+        self.send_request(req).await?;
+
+        let started = Instant::now();
+        loop {
+            let elapsed = started.elapsed();
+            if elapsed >= duration {
+                self.pending.resolve(&msg_incr);
+                return Err(anyhow!(
+                    "websocket request {} timed out after {}ms",
+                    msg_incr,
+                    duration.as_millis()
+                ));
+            }
+
+            let remaining = duration.saturating_sub(elapsed);
+            let event = match timeout(remaining, self.recv_event_from_stream()).await {
+                Ok(result) => result?,
+                Err(_) => {
+                    self.pending.resolve(&msg_incr);
+                    return Err(anyhow!(
+                        "websocket request {} timed out after {}ms",
+                        msg_incr,
+                        duration.as_millis()
+                    ));
+                }
+            };
+
+            match event {
+                TransportEvent::Response(resp) if resp.msg_incr == msg_incr => return Ok(resp),
+                TransportEvent::Disconnected { reason } => {
+                    return Err(anyhow!("websocket closed: {reason}"));
+                }
+                TransportEvent::Response(resp) => {
+                    self.buffered_events
+                        .push_back(TransportEvent::Response(resp));
+                }
+                TransportEvent::Push(resp) => {
+                    self.buffered_events.push_back(TransportEvent::Push(resp));
+                }
+                _ => {}
+            }
+        }
+    }
+
     pub async fn send_heartbeat_ping(&mut self) -> Result<()> {
         self.stream
             .send(WsMessage::Text(heartbeat_ping_text().into()))
@@ -134,6 +188,14 @@ impl NativeWsClient {
     }
 
     pub async fn recv_event(&mut self) -> Result<TransportEvent> {
+        if let Some(event) = self.buffered_events.pop_front() {
+            return Ok(event);
+        }
+
+        self.recv_event_from_stream().await
+    }
+
+    async fn recv_event_from_stream(&mut self) -> Result<TransportEvent> {
         loop {
             let Some(frame) = self.stream.next().await else {
                 return Ok(TransportEvent::Disconnected {
@@ -314,6 +376,34 @@ mod tests {
                 assert_eq!(resp.msg_incr, "msg-after-reconnect");
             }
             other => panic!("expected response after reconnect, got {other:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn native_client_can_wait_for_matching_response() -> Result<()> {
+        let ws_addr = spawn_echo_server(true).await?;
+        let mut client = NativeWsClient::connect(test_config(ws_addr)).await?;
+        let req = GeneralWsReq::new(
+            WsReqIdentifier::SendMsg,
+            "u1",
+            "op1",
+            "msg-wait",
+            Vec::new(),
+        );
+
+        let resp = client
+            .send_request_wait_response(&req, Duration::from_secs(1))
+            .await?;
+
+        assert_eq!(resp.msg_incr, "msg-wait");
+        assert_eq!(resp.req_identifier, WsReqIdentifier::SendMsg.as_i32());
+        match client.recv_event().await? {
+            TransportEvent::Push(resp) => {
+                assert_eq!(resp.req_identifier, WsReqIdentifier::PushMsg.as_i32());
+            }
+            other => panic!("expected buffered or next push event, got {other:?}"),
         }
 
         Ok(())
