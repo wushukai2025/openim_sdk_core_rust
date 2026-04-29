@@ -1,6 +1,9 @@
 [workspace]
 members = [
+    "crates/openim-errors",
     "crates/openim-protocol",
+    "crates/openim-sync",
+    "crates/openim-types",
     "crates/openim-transport",
     "tools/protocol-spike",
 ]

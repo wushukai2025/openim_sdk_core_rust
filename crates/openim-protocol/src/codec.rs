@@ -1,36 +1,36 @@
 use std::io::{Read, Write};
 
 use flate2::{read::GzDecoder, write::GzEncoder, Compression};
-use thiserror::Error;
+use openim_errors::{OpenImError, Result};
 
 use crate::envelope::{GeneralWsReq, GeneralWsResp};
 
-#[derive(Debug, Error)]
-pub enum ProtocolError {
-    #[error("json encode/decode failed: {0}")]
-    Json(#[from] serde_json::Error),
-    #[error("gzip compression failed: {0}")]
-    Gzip(#[from] std::io::Error),
+pub type ProtocolError = OpenImError;
+
+pub fn encode_json_request(req: &GeneralWsReq) -> Result<Vec<u8>> {
+    serde_json::to_vec(req).map_err(|err| OpenImError::sdk_internal(err.to_string()))
 }
 
-pub fn encode_json_request(req: &GeneralWsReq) -> Result<Vec<u8>, ProtocolError> {
-    Ok(serde_json::to_vec(req)?)
+pub fn decode_json_response(data: &[u8]) -> Result<GeneralWsResp> {
+    serde_json::from_slice(data).map_err(|err| OpenImError::msg_decode_binary_ws(err.to_string()))
 }
 
-pub fn decode_json_response(data: &[u8]) -> Result<GeneralWsResp, ProtocolError> {
-    Ok(serde_json::from_slice(data)?)
-}
-
-pub fn gzip_compress(data: &[u8]) -> Result<Vec<u8>, ProtocolError> {
+pub fn gzip_compress(data: &[u8]) -> Result<Vec<u8>> {
     let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-    encoder.write_all(data)?;
-    Ok(encoder.finish()?)
+    encoder
+        .write_all(data)
+        .map_err(|err| OpenImError::sdk_internal(err.to_string()))?;
+    encoder
+        .finish()
+        .map_err(|err| OpenImError::sdk_internal(err.to_string()))
 }
 
-pub fn gzip_decompress(data: &[u8]) -> Result<Vec<u8>, ProtocolError> {
+pub fn gzip_decompress(data: &[u8]) -> Result<Vec<u8>> {
     let mut decoder = GzDecoder::new(data);
     let mut decoded = Vec::new();
-    decoder.read_to_end(&mut decoded)?;
+    decoder
+        .read_to_end(&mut decoded)
+        .map_err(|err| OpenImError::msg_decompression(err.to_string()))?;
     Ok(decoded)
 }
 

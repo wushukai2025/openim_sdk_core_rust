@@ -1,14 +1,12 @@
 [package]
-name = "openim-protocol"
+name = "openim-types"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-base64.workspace = true
-flate2.workspace = true
-openim-errors = { path = "../openim-errors" }
-prost.workspace = true
 serde.workspace = true
+
+[dev-dependencies]
 serde_json.workspace = true

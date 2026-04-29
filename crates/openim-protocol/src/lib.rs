@@ -10,4 +10,4 @@ pub use codec::{
 pub use constants::WsReqIdentifier;
 pub use envelope::{GeneralWsReq, GeneralWsResp};
 pub use operation::{gen_msg_incr, gen_operation_id};
-pub use sdkws::{GetMaxSeqReq, GetMaxSeqResp};
+pub use sdkws::{GetMaxSeqReq, GetMaxSeqResp, RequestPagination};

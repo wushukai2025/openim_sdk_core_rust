@@ -16,6 +16,14 @@ pub struct GetMaxSeqResp {
     pub min_seqs: HashMap<String, i64>,
 }
 
+#[derive(Clone, PartialEq, Eq, Message)]
+pub struct RequestPagination {
+    #[prost(int32, tag = "1")]
+    pub page_number: i32,
+    #[prost(int32, tag = "2")]
+    pub show_number: i32,
+}
+
 #[cfg(test)]
 mod tests {
     use prost::Message;
@@ -46,5 +54,18 @@ mod tests {
 
         assert_eq!(decoded.max_seqs["single_u1"], 9);
         assert_eq!(decoded.min_seqs["single_u1"], 1);
+    }
+
+    #[test]
+    fn request_pagination_matches_proto_field_numbers() {
+        let req = RequestPagination {
+            page_number: 1,
+            show_number: 200,
+        };
+        let mut encoded = Vec::new();
+
+        req.encode(&mut encoded).unwrap();
+
+        assert_eq!(encoded, vec![8, 1, 16, 200, 1]);
     }
 }
