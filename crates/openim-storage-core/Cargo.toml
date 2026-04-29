@@ -8,6 +8,4 @@ rust-version.workspace = true
 [dependencies]
 openim-errors = { path = "../openim-errors" }
 serde.workspace = true
-
-[dev-dependencies]
 serde_json.workspace = true

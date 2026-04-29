@@ -1,0 +1,13 @@
+[package]
+name = "db-fixture"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+openim-storage-core = { path = "../../crates/openim-storage-core" }
+openim-storage-sqlite = { path = "../../crates/openim-storage-sqlite" }
+
