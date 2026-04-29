@@ -52,6 +52,24 @@ impl UploadProgress {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UploadedPart {
+    pub part_number: u32,
+    pub etag: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UploadOutcome {
+    pub uploaded_parts: Vec<UploadedPart>,
+    pub progress: UploadProgress,
+}
+
+pub trait FileUploadClient {
+    fn upload_part(&mut self, file: &FileDigest, part: &UploadPart) -> Result<UploadedPart>;
+}
+
 pub struct FileTransferService;
 
 impl FileTransferService {
@@ -111,6 +129,34 @@ impl FileTransferService {
         Ok(())
     }
 
+    pub fn upload_missing_parts(
+        plan: &mut MultipartUploadPlan,
+        client: &mut dyn FileUploadClient,
+    ) -> Result<UploadOutcome> {
+        let mut uploaded_parts = Vec::new();
+        for part in &mut plan.parts {
+            if part.uploaded {
+                continue;
+            }
+
+            let uploaded = client.upload_part(&plan.file, part)?;
+            if uploaded.part_number != part.part_number {
+                return Err(OpenImError::args(format!(
+                    "uploaded part_number mismatch: expected {}, got {}",
+                    part.part_number, uploaded.part_number
+                )));
+            }
+
+            part.uploaded = true;
+            uploaded_parts.push(uploaded);
+        }
+
+        Ok(UploadOutcome {
+            uploaded_parts,
+            progress: Self::progress(plan),
+        })
+    }
+
     pub fn progress(plan: &MultipartUploadPlan) -> UploadProgress {
         let uploaded_parts = plan.parts.iter().filter(|part| part.uploaded).count();
         let uploaded_bytes = plan
@@ -164,12 +210,71 @@ mod tests {
         assert!(!progress.is_complete());
     }
 
+    #[test]
+    fn upload_missing_parts_skips_resumed_parts_and_updates_progress() {
+        let mut plan = FileTransferService::plan_multipart(file(10), 4).unwrap();
+        plan = FileTransferService::resume_plan(plan, [1]);
+        let mut client = FakeUploadClient::default();
+
+        let outcome = FileTransferService::upload_missing_parts(&mut plan, &mut client).unwrap();
+
+        assert_eq!(client.uploaded, vec![2, 3]);
+        assert_eq!(
+            outcome
+                .uploaded_parts
+                .iter()
+                .map(|part| part.part_number)
+                .collect::<Vec<_>>(),
+            vec![2, 3]
+        );
+        assert_eq!(outcome.progress.uploaded_bytes, 10);
+        assert!(outcome.progress.is_complete());
+        assert!(plan.parts.iter().all(|part| part.uploaded));
+    }
+
+    #[test]
+    fn upload_missing_parts_rejects_part_number_mismatch() {
+        let mut plan = FileTransferService::plan_multipart(file(10), 4).unwrap();
+        let mut client = MismatchedUploadClient;
+
+        let err = FileTransferService::upload_missing_parts(&mut plan, &mut client).unwrap_err();
+
+        assert!(err.to_string().contains("uploaded part_number mismatch"));
+        assert!(!plan.parts[0].uploaded);
+    }
+
     fn file(size: u64) -> FileDigest {
         FileDigest {
             file_name: "avatar.png".to_string(),
             file_size: size,
             content_type: "image/png".to_string(),
             sha256: "sha".to_string(),
+        }
+    }
+
+    #[derive(Default)]
+    struct FakeUploadClient {
+        uploaded: Vec<u32>,
+    }
+
+    impl FileUploadClient for FakeUploadClient {
+        fn upload_part(&mut self, _file: &FileDigest, part: &UploadPart) -> Result<UploadedPart> {
+            self.uploaded.push(part.part_number);
+            Ok(UploadedPart {
+                part_number: part.part_number,
+                etag: format!("etag-{}", part.part_number),
+            })
+        }
+    }
+
+    struct MismatchedUploadClient;
+
+    impl FileUploadClient for MismatchedUploadClient {
+        fn upload_part(&mut self, _file: &FileDigest, part: &UploadPart) -> Result<UploadedPart> {
+            Ok(UploadedPart {
+                part_number: part.part_number + 1,
+                etag: "bad".to_string(),
+            })
         }
     }
 }

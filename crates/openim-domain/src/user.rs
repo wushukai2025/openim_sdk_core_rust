@@ -22,6 +22,12 @@ pub struct UserProfilePatch {
     pub updated_at: Option<i64>,
 }
 
+pub trait UserProfileRepository {
+    fn save_profile(&mut self, profile: UserProfile) -> Result<()>;
+    fn load_profile(&self, user_id: &str) -> Result<Option<UserProfile>>;
+    fn load_profiles(&self, user_ids: &[UserId]) -> Result<Vec<UserProfile>>;
+}
+
 #[derive(Debug, Default)]
 pub struct UserService {
     profiles: HashMap<UserId, UserProfile>,
@@ -83,6 +89,20 @@ impl UserService {
 
     pub fn is_empty(&self) -> bool {
         self.profiles.is_empty()
+    }
+}
+
+impl UserProfileRepository for UserService {
+    fn save_profile(&mut self, profile: UserProfile) -> Result<()> {
+        UserService::upsert_profile(self, profile)
+    }
+
+    fn load_profile(&self, user_id: &str) -> Result<Option<UserProfile>> {
+        UserService::get_profile(self, user_id)
+    }
+
+    fn load_profiles(&self, user_ids: &[UserId]) -> Result<Vec<UserProfile>> {
+        UserService::get_profiles(self, user_ids)
     }
 }
 
@@ -153,6 +173,25 @@ mod tests {
                 .map(|profile| profile.user_id.as_str())
                 .collect::<Vec<_>>(),
             vec!["u2", "u1"]
+        );
+    }
+
+    #[test]
+    fn repository_trait_delegates_to_user_service() {
+        let mut repository = UserService::new();
+        repository
+            .save_profile(UserProfile {
+                user_id: "u1".to_string(),
+                nickname: "Alice".to_string(),
+                face_url: String::new(),
+                ex: String::new(),
+                updated_at: 1,
+            })
+            .unwrap();
+
+        assert_eq!(
+            repository.load_profile("u1").unwrap().unwrap().nickname,
+            "Alice"
         );
     }
 }

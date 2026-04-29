@@ -29,6 +29,18 @@ pub struct GroupMemberInfo {
     pub join_time: i64,
 }
 
+pub trait GroupRepository {
+    fn save_group(&mut self, group: GroupInfo) -> Result<()>;
+    fn remove_group(&mut self, group_id: &str) -> Result<()>;
+    fn load_groups(&self) -> Vec<GroupInfo>;
+}
+
+pub trait GroupMemberRepository {
+    fn save_member(&mut self, member: GroupMemberInfo) -> Result<()>;
+    fn remove_member(&mut self, group_id: &str, user_id: &str) -> Result<()>;
+    fn load_members(&self, group_id: &str) -> Result<Vec<GroupMemberInfo>>;
+}
+
 #[derive(Debug, Default)]
 pub struct GroupService {
     groups: HashMap<GroupId, GroupInfo>,
@@ -49,6 +61,14 @@ impl GroupService {
     pub fn get_group(&self, group_id: &str) -> Result<Option<GroupInfo>> {
         ensure_id(group_id, "group_id")?;
         Ok(self.groups.get(group_id).cloned())
+    }
+
+    pub fn delete_group(&mut self, group_id: &str) -> Result<()> {
+        ensure_id(group_id, "group_id")?;
+        self.groups.remove(group_id);
+        self.members
+            .retain(|(member_group_id, _), _| member_group_id != group_id);
+        Ok(())
     }
 
     pub fn joined_groups(&self) -> Vec<GroupInfo> {
@@ -79,9 +99,7 @@ impl GroupService {
                     self.groups.insert(server.group_id.clone(), server);
                 }
                 SyncAction::Delete { local } => {
-                    self.groups.remove(&local.group_id);
-                    self.members
-                        .retain(|(group_id, _), _| group_id != &local.group_id);
+                    self.delete_group(&local.group_id)?;
                 }
                 SyncAction::Unchanged { .. } => {}
             }
@@ -93,6 +111,13 @@ impl GroupService {
     pub fn upsert_member(&mut self, member: GroupMemberInfo) -> Result<()> {
         ensure_pair(&member.group_id, &member.user_id)?;
         self.members.insert(member_key(&member), member);
+        Ok(())
+    }
+
+    pub fn delete_member(&mut self, group_id: &str, user_id: &str) -> Result<()> {
+        ensure_pair(group_id, user_id)?;
+        self.members
+            .remove(&(group_id.to_string(), user_id.to_string()));
         Ok(())
     }
 
@@ -145,6 +170,34 @@ impl GroupService {
         }
 
         Ok(summary)
+    }
+}
+
+impl GroupRepository for GroupService {
+    fn save_group(&mut self, group: GroupInfo) -> Result<()> {
+        GroupService::upsert_group(self, group)
+    }
+
+    fn remove_group(&mut self, group_id: &str) -> Result<()> {
+        GroupService::delete_group(self, group_id)
+    }
+
+    fn load_groups(&self) -> Vec<GroupInfo> {
+        GroupService::joined_groups(self)
+    }
+}
+
+impl GroupMemberRepository for GroupService {
+    fn save_member(&mut self, member: GroupMemberInfo) -> Result<()> {
+        GroupService::upsert_member(self, member)
+    }
+
+    fn remove_member(&mut self, group_id: &str, user_id: &str) -> Result<()> {
+        GroupService::delete_member(self, group_id, user_id)
+    }
+
+    fn load_members(&self, group_id: &str) -> Result<Vec<GroupMemberInfo>> {
+        GroupService::group_members(self, group_id)
     }
 }
 
@@ -215,6 +268,24 @@ mod tests {
             vec!["u3"]
         );
         assert_eq!(service.group_members("g2").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn repository_traits_delegate_to_group_service() {
+        let mut repository = GroupService::new();
+        repository.save_group(group("g1", "Group")).unwrap();
+        repository.save_member(member("g1", "u1", "Alice")).unwrap();
+
+        assert_eq!(repository.load_groups().len(), 1);
+        assert_eq!(repository.load_members("g1").unwrap().len(), 1);
+
+        repository.remove_member("g1", "u1").unwrap();
+        assert!(repository.load_members("g1").unwrap().is_empty());
+
+        repository.save_member(member("g1", "u2", "Bob")).unwrap();
+        repository.remove_group("g1").unwrap();
+        assert!(repository.load_groups().is_empty());
+        assert!(repository.load_members("g1").unwrap().is_empty());
     }
 
     fn group(group_id: &str, name: &str) -> GroupInfo {

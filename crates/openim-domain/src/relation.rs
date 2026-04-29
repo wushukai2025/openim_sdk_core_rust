@@ -28,6 +28,18 @@ pub struct BlacklistInfo {
     pub updated_at: i64,
 }
 
+pub trait FriendRepository {
+    fn save_friend(&mut self, friend: FriendInfo) -> Result<()>;
+    fn remove_friend(&mut self, owner_user_id: &str, friend_user_id: &str) -> Result<()>;
+    fn load_friends(&self, owner_user_id: &str) -> Result<Vec<FriendInfo>>;
+}
+
+pub trait BlacklistRepository {
+    fn save_blacklist(&mut self, black: BlacklistInfo) -> Result<()>;
+    fn remove_blacklist(&mut self, owner_user_id: &str, blocked_user_id: &str) -> Result<()>;
+    fn load_blacklist(&self, owner_user_id: &str) -> Result<Vec<BlacklistInfo>>;
+}
+
 #[derive(Debug, Default)]
 pub struct RelationService {
     friends: HashMap<(UserId, UserId), FriendInfo>,
@@ -119,6 +131,13 @@ impl RelationService {
         Ok(())
     }
 
+    pub fn delete_blacklist(&mut self, owner_user_id: &str, blocked_user_id: &str) -> Result<()> {
+        ensure_pair(owner_user_id, blocked_user_id)?;
+        self.blacklist
+            .remove(&(owner_user_id.to_string(), blocked_user_id.to_string()));
+        Ok(())
+    }
+
     pub fn all_blacklist(&self, owner_user_id: &str) -> Result<Vec<BlacklistInfo>> {
         ensure_user_id(owner_user_id, "owner_user_id")?;
         let mut blacklist = self
@@ -166,6 +185,34 @@ impl RelationService {
         }
 
         Ok(summary)
+    }
+}
+
+impl FriendRepository for RelationService {
+    fn save_friend(&mut self, friend: FriendInfo) -> Result<()> {
+        RelationService::upsert_friend(self, friend)
+    }
+
+    fn remove_friend(&mut self, owner_user_id: &str, friend_user_id: &str) -> Result<()> {
+        RelationService::delete_friend(self, owner_user_id, friend_user_id)
+    }
+
+    fn load_friends(&self, owner_user_id: &str) -> Result<Vec<FriendInfo>> {
+        RelationService::all_friends(self, owner_user_id)
+    }
+}
+
+impl BlacklistRepository for RelationService {
+    fn save_blacklist(&mut self, black: BlacklistInfo) -> Result<()> {
+        RelationService::upsert_blacklist(self, black)
+    }
+
+    fn remove_blacklist(&mut self, owner_user_id: &str, blocked_user_id: &str) -> Result<()> {
+        RelationService::delete_blacklist(self, owner_user_id, blocked_user_id)
+    }
+
+    fn load_blacklist(&self, owner_user_id: &str) -> Result<Vec<BlacklistInfo>> {
+        RelationService::all_blacklist(self, owner_user_id)
     }
 }
 
@@ -251,6 +298,24 @@ mod tests {
 
         assert_eq!(summary.deleted, 1);
         assert!(service.all_blacklist("owner").unwrap().is_empty());
+    }
+
+    #[test]
+    fn repository_traits_delegate_to_relation_service() {
+        let mut repository = RelationService::new();
+        repository
+            .save_friend(friend("owner", "u1", "Alice"))
+            .unwrap();
+        repository.save_blacklist(black("owner", "u2")).unwrap();
+
+        assert_eq!(repository.load_friends("owner").unwrap().len(), 1);
+        assert_eq!(repository.load_blacklist("owner").unwrap().len(), 1);
+
+        repository.remove_friend("owner", "u1").unwrap();
+        repository.remove_blacklist("owner", "u2").unwrap();
+
+        assert!(repository.load_friends("owner").unwrap().is_empty());
+        assert!(repository.load_blacklist("owner").unwrap().is_empty());
     }
 
     fn friend(owner: &str, user_id: &str, nickname: &str) -> FriendInfo {
