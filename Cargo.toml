@@ -8,6 +8,9 @@ members = [
     "crates/openim-sync",
     "crates/openim-types",
     "crates/openim-transport",
+    "crates/openim-transport-core",
+    "crates/openim-transport-native",
+    "crates/openim-transport-wasm",
     "tools/db-fixture",
     "tools/protocol-spike",
 ]
@@ -24,6 +27,7 @@ anyhow = "1"
 base64 = "0.22"
 clap = { version = "4", features = ["derive", "env"] }
 flate2 = "1"
+futures-channel = "0.3"
 futures-util = "0.3"
 js-sys = "0.3"
 prost = "0.13"

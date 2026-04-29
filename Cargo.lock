@@ -309,6 +309,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "futures-channel"
+version = "0.3.32"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "07bbe89c50d7a535e539b8c17bc0b49bdb77747034daa8087407d655f3f7cc1d"
+dependencies = [
+ "futures-core",
+]
+
+[[package]]
 name = "futures-core"
 version = "0.3.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -721,15 +730,48 @@ dependencies = [
 name = "openim-transport"
 version = "0.1.0"
 dependencies = [
+ "openim-transport-core",
+ "openim-transport-native",
+ "openim-transport-wasm",
+]
+
+[[package]]
+name = "openim-transport-core"
+version = "0.1.0"
+dependencies = [
  "anyhow",
- "futures-util",
  "openim-protocol",
  "prost",
  "serde",
  "serde_json",
+ "url",
+]
+
+[[package]]
+name = "openim-transport-native"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "futures-util",
+ "openim-protocol",
+ "openim-transport-core",
+ "serde_json",
  "tokio",
  "tokio-tungstenite",
- "url",
+]
+
+[[package]]
+name = "openim-transport-wasm"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "futures-channel",
+ "futures-util",
+ "js-sys",
+ "openim-protocol",
+ "openim-transport-core",
+ "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]
