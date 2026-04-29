@@ -1,7 +1,10 @@
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 use openim_domain::{group::GroupService, relation::RelationService, user::UserService};
 use openim_errors::{OpenImError, Result};
+use openim_storage_core::{openim_db_file, openim_indexeddb_name};
+use openim_transport_core::TransportConfig;
 use openim_types::{Platform, UserId};
 
 pub type ListenerId = u64;
@@ -44,6 +47,32 @@ impl SessionConfig {
         }
         Ok(())
     }
+
+    pub fn transport_config(&self, credentials: &LoginCredentials) -> Result<TransportConfig> {
+        credentials.validate()?;
+        Ok(TransportConfig::new(
+            self.ws_addr.clone(),
+            credentials.user_id.clone(),
+            credentials.token.clone(),
+            self.platform.as_i32(),
+        ))
+    }
+
+    pub fn storage_target(&self, login_user_id: &str) -> Result<StorageTarget> {
+        ensure_not_empty(login_user_id, "login_user_id")?;
+        if matches!(self.platform, Platform::Web | Platform::MiniWeb) {
+            return Ok(StorageTarget::IndexedDb {
+                name: openim_indexeddb_name(login_user_id)?,
+            });
+        }
+
+        let Some(data_dir) = &self.data_dir else {
+            return Ok(StorageTarget::Unconfigured);
+        };
+        Ok(StorageTarget::Sqlite {
+            path: openim_db_file(data_dir, login_user_id)?,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,6 +114,13 @@ pub enum SessionEvent {
     ListenerUnregistered { listener_id: ListenerId },
     TaskStarted { name: String },
     TaskStopped { name: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StorageTarget {
+    Unconfigured,
+    Sqlite { path: PathBuf },
+    IndexedDb { name: String },
 }
 
 #[derive(Debug, Default)]
@@ -196,6 +232,46 @@ impl ListenerRegistry {
     }
 }
 
+pub trait SessionResourceAdapter: Send {
+    fn init(&mut self, config: &SessionConfig) -> Result<()>;
+    fn login(
+        &mut self,
+        config: &SessionConfig,
+        credentials: &LoginCredentials,
+        transport: &TransportConfig,
+        storage: &StorageTarget,
+    ) -> Result<()>;
+    fn logout(&mut self, user_id: &str) -> Result<()>;
+    fn uninit(&mut self) -> Result<()>;
+}
+
+#[derive(Debug, Default)]
+pub struct NoopSessionResourceAdapter;
+
+impl SessionResourceAdapter for NoopSessionResourceAdapter {
+    fn init(&mut self, _config: &SessionConfig) -> Result<()> {
+        Ok(())
+    }
+
+    fn login(
+        &mut self,
+        _config: &SessionConfig,
+        _credentials: &LoginCredentials,
+        _transport: &TransportConfig,
+        _storage: &StorageTarget,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    fn logout(&mut self, _user_id: &str) -> Result<()> {
+        Ok(())
+    }
+
+    fn uninit(&mut self) -> Result<()> {
+        Ok(())
+    }
+}
+
 pub struct OpenImSession {
     config: SessionConfig,
     state: SessionState,
@@ -203,10 +279,18 @@ pub struct OpenImSession {
     domains: DomainServices,
     listeners: ListenerRegistry,
     tasks: TaskSupervisor,
+    resources: Box<dyn SessionResourceAdapter>,
 }
 
 impl OpenImSession {
     pub fn new(config: SessionConfig) -> Result<Self> {
+        Self::with_resource_adapter(config, Box::new(NoopSessionResourceAdapter))
+    }
+
+    pub fn with_resource_adapter(
+        config: SessionConfig,
+        resources: Box<dyn SessionResourceAdapter>,
+    ) -> Result<Self> {
         config.validate()?;
         Ok(Self {
             config,
@@ -215,12 +299,14 @@ impl OpenImSession {
             domains: DomainServices::default(),
             listeners: ListenerRegistry::new(),
             tasks: TaskSupervisor::new(),
+            resources,
         })
     }
 
     pub fn init(&mut self) -> Result<()> {
         match self.state {
             SessionState::Created | SessionState::Uninitialized => {
+                self.resources.init(&self.config)?;
                 self.state = SessionState::Initialized;
                 self.emit(SessionEvent::Initialized);
                 Ok(())
@@ -239,6 +325,10 @@ impl OpenImSession {
             }
         }
 
+        let transport = self.config.transport_config(&credentials)?;
+        let storage = self.config.storage_target(&credentials.user_id)?;
+        self.resources
+            .login(&self.config, &credentials, &transport, &storage)?;
         self.login_user_id = Some(credentials.user_id.clone());
         self.domains = DomainServices::default();
         self.state = SessionState::LoggedIn;
@@ -255,6 +345,7 @@ impl OpenImSession {
             return Ok(());
         };
 
+        self.resources.logout(&user_id)?;
         self.stop_all_tasks();
         self.login_user_id = None;
         self.domains = DomainServices::default();
@@ -264,6 +355,7 @@ impl OpenImSession {
     }
 
     pub fn uninit(&mut self) -> Result<()> {
+        self.resources.uninit()?;
         self.stop_all_tasks();
         self.login_user_id = None;
         self.domains = DomainServices::default();
@@ -382,6 +474,40 @@ mod tests {
     }
 
     #[test]
+    fn session_config_builds_transport_and_storage_targets() {
+        let credentials = credentials();
+        let transport = config().transport_config(&credentials).unwrap();
+
+        assert_eq!(transport.ws_addr, "wss://ws.openim.test");
+        assert_eq!(transport.user_id, "u1");
+        assert_eq!(transport.token, "token");
+        assert_eq!(transport.platform_id, Platform::Web.as_i32());
+        assert!(transport.compression);
+        assert_eq!(
+            config().storage_target("u1").unwrap(),
+            StorageTarget::IndexedDb {
+                name: "OpenIM_v3_u1".to_string(),
+            }
+        );
+
+        let native = SessionConfig::new(
+            Platform::Macos,
+            "https://api.openim.test",
+            "wss://ws.openim.test",
+        )
+        .with_data_dir("db");
+        assert_eq!(
+            native.storage_target("u1").unwrap(),
+            StorageTarget::Sqlite {
+                path: std::env::current_dir()
+                    .unwrap()
+                    .join("db")
+                    .join("OpenIM_v3_u1.db"),
+            }
+        );
+    }
+
+    #[test]
     fn lifecycle_starts_and_stops_tasks() {
         let events = Arc::new(Mutex::new(Vec::<SessionEvent>::new()));
         let captured = events.clone();
@@ -471,5 +597,70 @@ mod tests {
 
         assert_eq!(*first.lock().unwrap(), 2);
         assert_eq!(*second.lock().unwrap(), 3);
+    }
+
+    #[test]
+    fn resource_adapter_receives_lifecycle_boundaries() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let adapter = RecordingAdapter {
+            calls: calls.clone(),
+        };
+        let mut session =
+            OpenImSession::with_resource_adapter(config(), Box::new(adapter)).unwrap();
+
+        session.init().unwrap();
+        session.login(credentials()).unwrap();
+        session.logout().unwrap();
+        session.uninit().unwrap();
+
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec![
+                "init".to_string(),
+                "login:u1:wss://ws.openim.test:OpenIM_v3_u1".to_string(),
+                "logout:u1".to_string(),
+                "uninit".to_string(),
+            ]
+        );
+    }
+
+    struct RecordingAdapter {
+        calls: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl SessionResourceAdapter for RecordingAdapter {
+        fn init(&mut self, _config: &SessionConfig) -> Result<()> {
+            self.calls.lock().unwrap().push("init".to_string());
+            Ok(())
+        }
+
+        fn login(
+            &mut self,
+            _config: &SessionConfig,
+            credentials: &LoginCredentials,
+            transport: &TransportConfig,
+            storage: &StorageTarget,
+        ) -> Result<()> {
+            let storage_name = match storage {
+                StorageTarget::IndexedDb { name } => name.clone(),
+                StorageTarget::Sqlite { path } => path.display().to_string(),
+                StorageTarget::Unconfigured => "unconfigured".to_string(),
+            };
+            self.calls.lock().unwrap().push(format!(
+                "login:{}:{}:{}",
+                credentials.user_id, transport.ws_addr, storage_name
+            ));
+            Ok(())
+        }
+
+        fn logout(&mut self, user_id: &str) -> Result<()> {
+            self.calls.lock().unwrap().push(format!("logout:{user_id}"));
+            Ok(())
+        }
+
+        fn uninit(&mut self) -> Result<()> {
+            self.calls.lock().unwrap().push("uninit".to_string());
+            Ok(())
+        }
     }
 }

@@ -8,4 +8,6 @@ rust-version.workspace = true
 [dependencies]
 openim-domain = { path = "../openim-domain" }
 openim-errors = { path = "../openim-errors" }
+openim-storage-core = { path = "../openim-storage-core" }
+openim-transport-core = { path = "../openim-transport-core" }
 openim-types = { path = "../openim-types" }

@@ -701,6 +701,8 @@ version = "0.1.0"
 dependencies = [
  "openim-domain",
  "openim-errors",
+ "openim-storage-core",
+ "openim-transport-core",
  "openim-types",
 ]
 
