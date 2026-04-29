@@ -31,6 +31,15 @@ mod unsupported {
             ))
         }
 
+        pub async fn reconnect(
+            &mut self,
+            _policy: openim_transport_core::ReconnectPolicy,
+        ) -> Result<()> {
+            Err(anyhow!(
+                "openim-transport-wasm is only available on wasm32 targets"
+            ))
+        }
+
         pub async fn send_heartbeat_ping(&mut self) -> Result<()> {
             Err(anyhow!(
                 "openim-transport-wasm is only available on wasm32 targets"

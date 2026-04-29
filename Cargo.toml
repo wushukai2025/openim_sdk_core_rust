@@ -13,6 +13,7 @@ members = [
     "crates/openim-transport-wasm",
     "tools/db-fixture",
     "tools/protocol-spike",
+    "tools/transport-fixture",
 ]
 resolver = "2"
 

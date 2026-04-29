@@ -771,6 +771,8 @@ dependencies = [
  "openim-protocol",
  "openim-transport-core",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "wasm-bindgen-test",
  "web-sys",
 ]
 
@@ -1205,6 +1207,18 @@ dependencies = [
  "tokio-rustls",
  "tungstenite",
  "webpki-roots 0.26.11",
+]
+
+[[package]]
+name = "transport-fixture"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "futures-util",
+ "openim-protocol",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite",
 ]
 
 [[package]]
