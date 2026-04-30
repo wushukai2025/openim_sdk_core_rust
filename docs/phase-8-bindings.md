@@ -15,7 +15,7 @@ a:has(code[data-code-ref]) {
 
 ## 结论
 
-Phase 8 已先落地可本地编译的绑定层骨架：原生 C ABI crate、wasm-bindgen crate、句柄模型、基础生命周期 API、通用 session event listener 桥接、C header、desktop C、iOS Swift、Android Kotlin/JNI 和 Web TypeScript 生命周期示例源码已进入 workspace，并通过本地单元测试覆盖示例 API 漂移。当前已冻结已实现 Session event 到 Go 细分 listener 的第一批映射种子；仍不冒充平台交付：真实平台工程构建、真实平台打包产物、Go SDK 细分 listener 全量映射和真实服务端端到端验证仍属于后续 Gate。
+Phase 8 已先落地可本地编译的绑定层骨架：原生 C ABI crate、wasm-bindgen crate、句柄模型、基础生命周期 API、通用 session event listener 桥接、C header、desktop C、iOS Swift、Android Kotlin/JNI 和 Web TypeScript 生命周期示例源码已进入 workspace，并通过本地单元测试覆盖示例 API 漂移。当前已冻结已实现 Session event 到 Go 细分 listener 的第一批映射种子；本轮继续把 desktop C 示例从“只有源码”推进到“Darwin 本机可实际 clang 链接 `openim-ffi` staticlib 并运行生命周期 smoke”，并把示例收敛到 `OPENIM_PLATFORM_MACOS` 与 `OPENIM_*` 环境变量覆写入口。仍不冒充平台交付：真实平台工程构建、真实平台打包产物、Go SDK 细分 listener 全量映射和真实服务端端到端验证仍属于后续 Gate。
 
 ## Rust 落地点
 
@@ -76,7 +76,7 @@ Phase 8 已先落地可本地编译的绑定层骨架：原生 C ABI crate、was
 - C ABI 对外声明已补 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase8-ffi-header">openim_ffi.h</code>，固定平台 ID、错误码、opaque handle 和 Init/Login/Logout/UnInit 函数签名。
 <!-- code-ref: phase8-ffi-header -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-ffi/include/openim_ffi.h#L1 -->
 
-- desktop 示例源码 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase8-desktop-example">openim_desktop_lifecycle.c</code> 直接调用 C ABI，覆盖 create、init、login、logout、uninit、destroy 和 last error。
+- desktop 示例源码 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase8-desktop-example">openim_desktop_lifecycle.c</code> 直接调用 C ABI，固定 `OPENIM_PLATFORM_MACOS`，支持通过 `OPENIM_API_ADDR`、`OPENIM_WS_ADDR`、`OPENIM_USER_ID` 和 `OPENIM_TOKEN` 覆盖默认值，并覆盖 create、init、login、logout、uninit、destroy 和 last error。
 <!-- code-ref: phase8-desktop-example -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/examples/desktop-c/openim_desktop_lifecycle.c#L1 -->
 
 - iOS 示例源码 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase8-ios-example">OpenIMLifecycleExample.swift</code> 通过 bridging header 使用 C ABI，注册通用 session event callback，并在 deinit 中清理 session handle。
@@ -93,6 +93,9 @@ Phase 8 已先落地可本地编译的绑定层骨架：原生 C ABI crate、was
 <!-- code-ref: phase8-native-example-test -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-ffi/src/lib.rs#L453 -->
 <!-- code-ref: phase8-web-example-test -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-wasm/src/lib.rs#L203 -->
 
+- Darwin 本地新增 desktop C 示例实际构建运行 smoke：测试会调用 `clang` 把 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase8-desktop-example-smoke">openim_desktop_lifecycle.c</code> 链接到 `openim-ffi` staticlib，并运行 listener 注册、Init、Login、Logout、UnInit 和事件输出最小回归。
+<!-- code-ref: phase8-desktop-example-smoke -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-ffi/src/lib.rs#L494 -->
+
 ## 验证命令
 
 ```bash
@@ -105,6 +108,22 @@ cargo test -p openim-compat-tests
 
 ```bash
 cargo test -p openim-ffi
+```
+
+```bash
+cargo build -p openim-ffi
+```
+
+```bash
+clang -I crates/openim-ffi/include examples/desktop-c/openim_desktop_lifecycle.c target/debug/libopenim_ffi.a -o /tmp/openim_desktop_lifecycle
+```
+
+```bash
+/tmp/openim_desktop_lifecycle
+```
+
+```bash
+OPENIM_API_ADDR=... OPENIM_WS_ADDR=... OPENIM_USER_ID=... OPENIM_TOKEN=... /tmp/openim_desktop_lifecycle
 ```
 
 ```bash
@@ -125,6 +144,6 @@ cargo test --workspace
 
 ## Gate 状态
 
-当前已完成：C ABI crate 骨架、wasm-bindgen crate 骨架、opaque 句柄模型、基础生命周期 API、状态码读取、last error 读取、native 和 wasm 回调线程策略常量、通用 session event listener 注册/注销、C header、desktop C 示例源码、iOS Swift 示例源码、Android Kotlin/JNI 生命周期与 listener 示例源码、Web TypeScript 示例源码、已实现 Session event 到 Go 细分 listener 的映射种子、本地 C ABI 单元测试、本地 wasm 单元测试、listener 生命周期派发测试、示例 API 漂移检查、wasm32 编译检查和 workspace 回归。
+当前已完成：C ABI crate 骨架、wasm-bindgen crate 骨架、opaque 句柄模型、基础生命周期 API、状态码读取、last error 读取、native 和 wasm 回调线程策略常量、通用 session event listener 注册/注销、C header、desktop C 示例源码、desktop C 示例 `OPENIM_PLATFORM_MACOS`/`OPENIM_*` 环境变量覆写入口、Darwin 本地 staticlib 构建链接运行 smoke、iOS Swift 示例源码、Android Kotlin/JNI 生命周期与 listener 示例源码、Web TypeScript 示例源码、已实现 Session event 到 Go 细分 listener 的映射种子、本地 C ABI 单元测试、本地 wasm 单元测试、listener 生命周期派发测试、示例 API 漂移检查、wasm32 编译检查和 workspace 回归。
 
-当前未完成：iOS、Android、桌面和 Web 示例工程的真实平台构建；Swift/Kotlin/TypeScript 包装产物发布；Go SDK 细分 listener 全量映射和平台包装层派发；真实平台线程切换；真实服务端 Init、Login、Logout、UnInit 端到端验证。这些能力继续留在 R2-09 平台 Gate 和后续真实集成 Gate。
+当前未完成：iOS、Android 和 Web 示例工程的真实平台构建；Swift/Kotlin/TypeScript 包装产物发布；Go SDK 细分 listener 全量映射和平台包装层派发；真实平台线程切换；macOS desktop C 示例在真实服务端环境下的 Init、Login、Logout、UnInit 端到端验证。这些能力继续留在 R2-09 平台 Gate 和后续真实集成 Gate。
