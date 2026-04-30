@@ -825,6 +825,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "openim-session-native"
+version = "0.1.0"
+dependencies = [
+ "openim-errors",
+ "openim-session",
+ "openim-storage-core",
+ "openim-storage-sqlite",
+ "openim-transport-core",
+ "openim-types",
+]
+
+[[package]]
 name = "openim-storage-core"
 version = "0.1.0"
 dependencies = [

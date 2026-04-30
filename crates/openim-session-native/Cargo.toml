@@ -1,0 +1,18 @@
+[package]
+name = "openim-session-native"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+openim-errors = { path = "../openim-errors" }
+openim-session = { path = "../openim-session" }
+openim-transport-core = { path = "../openim-transport-core" }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+openim-storage-core = { path = "../openim-storage-core" }
+openim-storage-sqlite = { path = "../openim-storage-sqlite" }
+
+[dev-dependencies]
+openim-types = { path = "../openim-types" }

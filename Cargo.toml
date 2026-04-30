@@ -5,6 +5,7 @@ members = [
     "crates/openim-domain",
     "crates/openim-protocol",
     "crates/openim-session",
+    "crates/openim-session-native",
     "crates/openim-storage-core",
     "crates/openim-storage-indexeddb",
     "crates/openim-storage-sqlite",
