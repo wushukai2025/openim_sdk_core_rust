@@ -977,6 +977,8 @@ dependencies = [
  "openim-storage-core",
  "openim-transport-core",
  "openim-types",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

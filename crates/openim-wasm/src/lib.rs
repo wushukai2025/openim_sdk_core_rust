@@ -3,7 +3,10 @@ use std::collections::BTreeMap;
 
 #[cfg(target_arch = "wasm32")]
 use js_sys::Function;
-use openim_session::{LoginCredentials, OpenImSession, SessionConfig, SessionState};
+use openim_session::{
+    map_session_event_payload_to_go_listener_dispatches, LoginCredentials, OpenImSession,
+    SessionConfig, SessionState,
+};
 use openim_types::Platform;
 use serde_json::json;
 use wasm_bindgen::prelude::*;
@@ -134,6 +137,16 @@ impl OpenImWasmSession {
     }
 }
 
+#[wasm_bindgen(js_name = mapSessionEventToGoListeners)]
+pub fn map_session_event_to_go_listeners(
+    event: String,
+    payload_json: String,
+) -> Result<String, JsValue> {
+    let dispatches = map_session_event_payload_to_go_listener_dispatches(&event, &payload_json)
+        .map_err(js_error)?;
+    serde_json::to_string(&dispatches).map_err(js_error)
+}
+
 impl OpenImWasmSession {
     fn emit_wasm_task_event(&self, event: &str, task_name: &str) {
         self.emit_wasm_event(event, json!({ "name": task_name }).to_string());
@@ -200,9 +213,24 @@ mod tests {
     }
 
     #[test]
+    fn wasm_maps_generic_session_event_to_go_listener_dispatches() {
+        let mapped = map_session_event_to_go_listeners(
+            "conversationChanged".to_string(),
+            r#"{"conversations":[{"conversationId":"c1"}]}"#.to_string(),
+        )
+        .unwrap();
+        let dispatches: serde_json::Value = serde_json::from_str(&mapped).unwrap();
+        assert_eq!(dispatches.as_array().unwrap().len(), 1);
+        assert_eq!(dispatches[0]["listener"], "OnConversationListener");
+        assert_eq!(dispatches[0]["method"], "OnConversationChanged");
+        assert_eq!(dispatches[0]["dataJson"], r#"[{"conversationId":"c1"}]"#);
+    }
+
+    #[test]
     fn web_example_uses_wasm_lifecycle_exports() {
         for export in [
             "OpenImWasmSession",
+            "mapSessionEventToGoListeners",
             "session.addListener",
             "session.init()",
             "session.login",

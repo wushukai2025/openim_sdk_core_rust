@@ -1,4 +1,7 @@
-import init, { OpenImWasmSession } from "../../pkg/openim_wasm";
+import init, {
+  mapSessionEventToGoListeners,
+  OpenImWasmSession,
+} from "../../pkg/openim_wasm";
 
 export async function runOpenIMLifecycle(
   apiAddr: string,
@@ -9,9 +12,19 @@ export async function runOpenIMLifecycle(
   await init();
 
   const session = new OpenImWasmSession(apiAddr, wsAddr, 5);
-  const events: Array<{ event: string; payload: unknown }> = [];
+  const events: Array<{
+    event: string;
+    payload: unknown;
+    goListenerDispatches: unknown;
+  }> = [];
   const listenerID = session.addListener((event: string, payloadJson: string) => {
-    events.push({ event, payload: JSON.parse(payloadJson) });
+    events.push({
+      event,
+      payload: JSON.parse(payloadJson),
+      goListenerDispatches: JSON.parse(
+        mapSessionEventToGoListeners(event, payloadJson),
+      ),
+    });
   });
 
   session.init();

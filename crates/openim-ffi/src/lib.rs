@@ -4,8 +4,8 @@ use std::os::raw::{c_char, c_int, c_void};
 use std::ptr;
 
 use openim_session::{
-    ListenerId, LoginCredentials, OpenImSession, SessionConfig, SessionEvent, SessionResourceKind,
-    SessionState,
+    map_session_event_payload_to_go_listener_dispatches, ListenerId, LoginCredentials,
+    OpenImSession, SessionConfig, SessionEvent, SessionResourceKind, SessionState,
 };
 use openim_session_native::NativeSessionResourceAdapter;
 use openim_types::Platform;
@@ -142,6 +142,34 @@ pub unsafe extern "C" fn openim_session_last_error(
         return ptr::null();
     }
     (&*handle).last_error.as_ptr()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn openim_map_session_event_to_go_listener_json(
+    event: *const c_char,
+    payload_json: *const c_char,
+) -> *mut c_char {
+    let Ok(event) = c_str(event) else {
+        return ptr::null_mut();
+    };
+    let Ok(payload_json) = c_str(payload_json) else {
+        return ptr::null_mut();
+    };
+    let Ok(dispatches) = map_session_event_payload_to_go_listener_dispatches(event, payload_json)
+    else {
+        return ptr::null_mut();
+    };
+    let Ok(serialized) = serde_json::to_string(&dispatches) else {
+        return ptr::null_mut();
+    };
+    c_string_lossy(&serialized).into_raw()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn openim_ffi_string_free(value: *mut c_char) {
+    if !value.is_null() {
+        drop(CString::from_raw(value));
+    }
 }
 
 #[no_mangle]
@@ -351,6 +379,10 @@ mod tests {
         "openim_session_register_listener",
         "openim_session_unregister_listener",
     ];
+    const MAPPING_EXPORTS: &[&str] = &[
+        "openim_map_session_event_to_go_listener_json",
+        "openim_ffi_string_free",
+    ];
     const LISTENER_FUNCTIONS: &[&str] = &[
         "openim_session_register_listener",
         "openim_session_unregister_listener",
@@ -555,6 +587,44 @@ mod tests {
     }
 
     #[test]
+    fn c_abi_maps_generic_session_event_to_go_listener_dispatches() {
+        let event = c_string("newMessages");
+        let payload = c_string(r#"{"messages":[{"clientMsgId":"m1"},{"clientMsgId":"m2"}]}"#);
+
+        unsafe {
+            let mapped =
+                openim_map_session_event_to_go_listener_json(event.as_ptr(), payload.as_ptr());
+            assert!(!mapped.is_null());
+
+            let dispatches: serde_json::Value =
+                serde_json::from_str(CStr::from_ptr(mapped).to_str().unwrap()).unwrap();
+            assert_eq!(dispatches.as_array().unwrap().len(), 2);
+            assert_eq!(dispatches[0]["listener"], "OnAdvancedMsgListener");
+            assert_eq!(dispatches[0]["method"], "OnRecvNewMessage");
+            let first_message: serde_json::Value =
+                serde_json::from_str(dispatches[0]["dataJson"].as_str().unwrap()).unwrap();
+            let second_message: serde_json::Value =
+                serde_json::from_str(dispatches[1]["dataJson"].as_str().unwrap()).unwrap();
+            assert_eq!(first_message["clientMsgId"], "m1");
+            assert_eq!(second_message["clientMsgId"], "m2");
+            openim_ffi_string_free(mapped);
+        }
+    }
+
+    #[test]
+    fn c_abi_rejects_invalid_mapping_payload() {
+        let event = c_string("newMessages");
+        let payload = c_string("{");
+
+        unsafe {
+            assert!(
+                openim_map_session_event_to_go_listener_json(event.as_ptr(), payload.as_ptr())
+                    .is_null()
+            );
+        }
+    }
+
+    #[test]
     fn c_abi_create_with_data_dir_opens_native_storage_resource() {
         let api_addr = c_string(&spawn_parse_token_server(
             "token",
@@ -594,6 +664,7 @@ mod tests {
         assert_contains_all(HEADER, LIFECYCLE_EXPORTS);
         assert_contains_all(HEADER, DATA_DIR_CREATE_EXPORTS);
         assert_contains_all(HEADER, LISTENER_EXPORTS);
+        assert_contains_all(HEADER, MAPPING_EXPORTS);
         assert_contains_all(DESKTOP_EXAMPLE, LISTENER_FUNCTIONS);
         assert_contains_all(IOS_EXAMPLE, LISTENER_FUNCTIONS);
         assert_contains_all(ANDROID_JNI_EXAMPLE, LISTENER_FUNCTIONS);

@@ -59,6 +59,10 @@ int openim_session_uninit(OpenImFfiSession *handle);
 
 int openim_session_state(const OpenImFfiSession *handle);
 const char *openim_session_last_error(const OpenImFfiSession *handle);
+char *openim_map_session_event_to_go_listener_json(
+    const char *event,
+    const char *payload_json);
+void openim_ffi_string_free(char *value);
 
 /* event and payload_json are valid only during the callback call. */
 uint64_t openim_session_register_listener(

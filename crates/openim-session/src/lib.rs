@@ -12,6 +12,8 @@ use openim_errors::{OpenImError, Result};
 use openim_storage_core::{openim_db_file, openim_indexeddb_name};
 use openim_transport_core::TransportConfig;
 use openim_types::{Platform, UserId};
+use serde::Serialize;
+use serde_json::Value;
 
 pub type ListenerId = u64;
 
@@ -159,6 +161,55 @@ pub enum SessionEvent {
     TotalUnreadCountChanged {
         total_unread_count: u32,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GoListenerDispatch {
+    pub listener: String,
+    pub method: String,
+    pub data_json: String,
+}
+
+pub fn map_session_event_payload_to_go_listener_dispatches(
+    event_name: &str,
+    payload_json: &str,
+) -> Result<Vec<GoListenerDispatch>> {
+    ensure_not_empty(event_name, "event_name")?;
+    ensure_not_empty(payload_json, "payload_json")?;
+
+    let payload = serde_json::from_str::<Value>(payload_json)
+        .map_err(|err| OpenImError::args(format!("invalid session event payload json: {err}")))?;
+
+    match event_name {
+        "newMessages" => {
+            let messages = payload_array(&payload, "messages")?;
+            Ok(messages
+                .iter()
+                .map(|message| GoListenerDispatch {
+                    listener: "OnAdvancedMsgListener".to_string(),
+                    method: "OnRecvNewMessage".to_string(),
+                    data_json: message.to_string(),
+                })
+                .collect())
+        }
+        "newConversations" => Ok(vec![GoListenerDispatch {
+            listener: "OnConversationListener".to_string(),
+            method: "OnNewConversation".to_string(),
+            data_json: payload_value(&payload, "conversations")?.to_string(),
+        }]),
+        "conversationChanged" => Ok(vec![GoListenerDispatch {
+            listener: "OnConversationListener".to_string(),
+            method: "OnConversationChanged".to_string(),
+            data_json: payload_value(&payload, "conversations")?.to_string(),
+        }]),
+        "totalUnreadCountChanged" => Ok(vec![GoListenerDispatch {
+            listener: "OnConversationListener".to_string(),
+            method: "OnTotalUnreadMessageCountChanged".to_string(),
+            data_json: payload_value(&payload, "totalUnreadCount")?.to_string(),
+        }]),
+        _ => Ok(Vec::new()),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -888,6 +939,21 @@ fn ensure_not_empty(value: &str, field: &str) -> Result<()> {
     }
 }
 
+fn payload_array<'a>(payload: &'a Value, key: &str) -> Result<&'a [Value]> {
+    payload_value(payload, key)?
+        .as_array()
+        .map(Vec::as_slice)
+        .ok_or_else(|| {
+            OpenImError::args(format!("session event payload field {key} is not an array"))
+        })
+}
+
+fn payload_value<'a>(payload: &'a Value, key: &str) -> Result<&'a Value> {
+    payload
+        .get(key)
+        .ok_or_else(|| OpenImError::args(format!("session event payload field {key} is missing")))
+}
+
 fn same_transport_config(left: &TransportConfig, right: &TransportConfig) -> bool {
     left.ws_addr == right.ws_addr
         && left.user_id == right.user_id
@@ -1121,6 +1187,95 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn session_event_payload_maps_to_go_listener_dispatches() {
+        let first = inbound_message();
+        let second = ChatMessage::incoming(
+            "client-2",
+            "server-2",
+            "u3",
+            "u1",
+            SessionType::Single,
+            MessageContent::Text {
+                content: "world".to_string(),
+            },
+            2,
+            200,
+        )
+        .unwrap();
+        let message_dispatches = map_session_event_payload_to_go_listener_dispatches(
+            "newMessages",
+            &serde_json::json!({ "messages": [first, second] }).to_string(),
+        )
+        .unwrap();
+        assert_eq!(message_dispatches.len(), 2);
+        assert_eq!(message_dispatches[0].listener, "OnAdvancedMsgListener");
+        assert_eq!(message_dispatches[0].method, "OnRecvNewMessage");
+        let first_message: ChatMessage =
+            serde_json::from_str(&message_dispatches[0].data_json).unwrap();
+        assert_eq!(first_message.client_msg_id, "client-1");
+
+        let conversation = ConversationInfo {
+            owner_user_id: "u1".to_string(),
+            conversation_id: "si_u1_u2".to_string(),
+            conversation_type: SessionType::Single,
+            user_id: "u2".to_string(),
+            group_id: String::new(),
+            show_name: "u2".to_string(),
+            face_url: String::new(),
+            recv_msg_opt: 0,
+            unread_count: 2,
+            latest_message: None,
+            latest_msg_send_time: 200,
+            draft_text: String::new(),
+            draft_text_time: 0,
+            is_pinned: false,
+            max_seq: 2,
+            min_seq: 0,
+            ex: String::new(),
+        };
+        let conversation_dispatches = map_session_event_payload_to_go_listener_dispatches(
+            "newConversations",
+            &serde_json::json!({ "conversations": [conversation.clone()] }).to_string(),
+        )
+        .unwrap();
+        assert_eq!(conversation_dispatches.len(), 1);
+        assert_eq!(
+            conversation_dispatches[0].listener,
+            "OnConversationListener"
+        );
+        assert_eq!(conversation_dispatches[0].method, "OnNewConversation");
+        let conversations: Vec<ConversationInfo> =
+            serde_json::from_str(&conversation_dispatches[0].data_json).unwrap();
+        assert_eq!(conversations, vec![conversation.clone()]);
+
+        let unread_dispatches = map_session_event_payload_to_go_listener_dispatches(
+            "totalUnreadCountChanged",
+            r#"{"totalUnreadCount":2}"#,
+        )
+        .unwrap();
+        assert_eq!(unread_dispatches.len(), 1);
+        assert_eq!(
+            unread_dispatches[0],
+            GoListenerDispatch {
+                listener: "OnConversationListener".to_string(),
+                method: "OnTotalUnreadMessageCountChanged".to_string(),
+                data_json: "2".to_string(),
+            }
+        );
+
+        let unsupported =
+            map_session_event_payload_to_go_listener_dispatches("initialized", "{}").unwrap();
+        assert!(unsupported.is_empty());
+    }
+
+    #[test]
+    fn session_event_payload_mapping_rejects_invalid_json() {
+        let err =
+            map_session_event_payload_to_go_listener_dispatches("newMessages", "{").unwrap_err();
+        assert!(err.message().contains("invalid session event payload json"));
     }
 
     #[test]
