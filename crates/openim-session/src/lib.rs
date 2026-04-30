@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use openim_domain::{
     conversation::{ConversationInfo, ConversationService},
     group::GroupService,
-    message::{ChatMessage, MessageService},
+    message::{ChatMessage, MessageSender, MessageService},
     relation::RelationService,
     user::UserService,
 };
@@ -433,6 +433,15 @@ pub trait SessionResourceAdapter: Send {
     fn uninit(&mut self) -> Result<()>;
 }
 
+pub trait SessionMessageTransport: MessageSender {
+    fn pull_messages(
+        &mut self,
+        owner_user_id: &str,
+        conversation_id: &str,
+    ) -> Result<Vec<ChatMessage>>;
+    fn pop_push_messages(&mut self, owner_user_id: &str) -> Result<Vec<ChatMessage>>;
+}
+
 #[derive(Debug, Default)]
 pub struct NoopSessionResourceAdapter;
 
@@ -636,6 +645,68 @@ impl OpenImSession {
         Ok(())
     }
 
+    pub fn send_message(
+        &mut self,
+        message: ChatMessage,
+        sender: &mut dyn MessageSender,
+    ) -> Result<ChatMessage> {
+        let owner_user_id = self.logged_in_user_id()?;
+        ensure_outgoing_owner(&owner_user_id, &message)?;
+
+        let sent = self.domains.messages.send_message(message, sender)?;
+        let conversations =
+            self.apply_messages_to_conversations(&owner_user_id, &[sent.clone()])?;
+        self.dispatch_conversation_changed(conversations)?;
+        Ok(sent)
+    }
+
+    pub fn pull_messages(
+        &mut self,
+        conversation_id: &str,
+        transport: &mut dyn SessionMessageTransport,
+    ) -> Result<Vec<ChatMessage>> {
+        let owner_user_id = self.logged_in_user_id()?;
+        ensure_not_empty(conversation_id, "conversation_id")?;
+
+        let messages = transport.pull_messages(&owner_user_id, conversation_id)?;
+        if messages.is_empty() {
+            return Ok(messages);
+        }
+        for message in &messages {
+            ensure_message_visible_to_owner(&owner_user_id, message)?;
+        }
+
+        self.domains
+            .messages
+            .sync_message_range(conversation_id, messages.clone())?;
+        let conversations = self.apply_messages_to_conversations(&owner_user_id, &messages)?;
+        self.dispatch_new_messages(messages.clone())?;
+        self.dispatch_conversation_changed(conversations)?;
+        Ok(messages)
+    }
+
+    pub fn receive_transport_pushes(
+        &mut self,
+        transport: &mut dyn SessionMessageTransport,
+    ) -> Result<Vec<ChatMessage>> {
+        let owner_user_id = self.logged_in_user_id()?;
+        let pushed = transport.pop_push_messages(&owner_user_id)?;
+        if pushed.is_empty() {
+            return Ok(pushed);
+        }
+
+        let mut received = Vec::with_capacity(pushed.len());
+        for message in pushed {
+            ensure_message_visible_to_owner(&owner_user_id, &message)?;
+            received.push(self.domains.messages.receive_message(message)?);
+        }
+
+        let conversations = self.apply_messages_to_conversations(&owner_user_id, &received)?;
+        self.dispatch_new_messages(received.clone())?;
+        self.dispatch_conversation_changed(conversations)?;
+        Ok(received)
+    }
+
     pub fn state(&self) -> SessionState {
         self.state
     }
@@ -693,12 +764,55 @@ impl OpenImSession {
         self.listeners.emit(&event);
     }
 
+    fn apply_messages_to_conversations(
+        &mut self,
+        owner_user_id: &str,
+        messages: &[ChatMessage],
+    ) -> Result<Vec<ConversationInfo>> {
+        let mut changed = BTreeMap::<String, ConversationInfo>::new();
+        for message in messages {
+            let conversation = self
+                .domains
+                .conversations
+                .apply_message(owner_user_id, message)?;
+            changed.insert(conversation.conversation_id.clone(), conversation);
+        }
+        Ok(changed.into_values().collect())
+    }
+
+    fn logged_in_user_id(&self) -> Result<UserId> {
+        self.ensure_logged_in()?;
+        self.login_user_id
+            .clone()
+            .ok_or_else(|| OpenImError::sdk_internal("login user missing"))
+    }
+
     fn ensure_logged_in(&self) -> Result<()> {
         if self.state != SessionState::LoggedIn {
             return Err(OpenImError::args("session is not logged in"));
         }
         Ok(())
     }
+}
+
+fn ensure_outgoing_owner(owner_user_id: &str, message: &ChatMessage) -> Result<()> {
+    if message.send_id == owner_user_id {
+        Ok(())
+    } else {
+        Err(OpenImError::args(
+            "message send_id does not match login user",
+        ))
+    }
+}
+
+fn ensure_message_visible_to_owner(owner_user_id: &str, message: &ChatMessage) -> Result<()> {
+    if message.send_id == owner_user_id || message.recv_id == owner_user_id {
+        return Ok(());
+    }
+    if !message.group_id.is_empty() {
+        return Ok(());
+    }
+    Err(OpenImError::args("message is outside login user scope"))
 }
 
 fn ensure_not_empty(value: &str, field: &str) -> Result<()> {
@@ -728,10 +842,11 @@ mod tests {
 
     use openim_domain::{
         conversation::ConversationInfo,
-        message::{ChatMessage, MessageContent, MessageSnapshot},
+        file::FileDigest,
+        message::{ChatMessage, MessageContent, MessageSender, MessageSnapshot, SendMessageAck},
         user::UserProfile,
     };
-    use openim_types::SessionType;
+    use openim_types::{MessageStatus, SessionType};
 
     use super::*;
 
@@ -928,6 +1043,127 @@ mod tests {
                 .filter(|event| matches!(event, SessionEvent::NewMessages { .. }))
                 .count(),
             1
+        );
+    }
+
+    #[test]
+    fn session_message_transport_sends_pulls_pushes_and_updates_conversations() {
+        let events = Arc::new(Mutex::new(Vec::<SessionEvent>::new()));
+        let captured = events.clone();
+        let mut session = OpenImSession::new(config()).unwrap();
+        session.register_listener(move |event| {
+            captured.lock().unwrap().push(event.clone());
+        });
+        session.init().unwrap();
+        session.login(credentials()).unwrap();
+
+        let file = FileDigest {
+            file_name: "report.pdf".to_string(),
+            file_size: 42,
+            content_type: "application/pdf".to_string(),
+            sha256: "sha".to_string(),
+        };
+        let outgoing = ChatMessage::outgoing(
+            "file-1",
+            "u1",
+            "u2",
+            SessionType::Single,
+            MessageContent::file_from_upload(&file, "https://cdn.openim.test/report.pdf").unwrap(),
+            10,
+        )
+        .unwrap();
+        let conversation_id = outgoing.conversation_id.clone();
+        let pulled = ChatMessage::incoming(
+            "pull-1",
+            "server-pull-1",
+            "u2",
+            "u1",
+            SessionType::Single,
+            MessageContent::Text {
+                content: "pulled".to_string(),
+            },
+            11,
+            110,
+        )
+        .unwrap();
+        let pushed = ChatMessage::incoming(
+            "push-1",
+            "server-push-1",
+            "u2",
+            "u1",
+            SessionType::Single,
+            MessageContent::Text {
+                content: "pushed".to_string(),
+            },
+            12,
+            120,
+        )
+        .unwrap();
+        let mut transport = FakeSessionMessageTransport {
+            pulled: vec![pulled.clone()],
+            pushes: vec![pushed.clone()],
+            next_seq: 10,
+            ..FakeSessionMessageTransport::default()
+        };
+
+        let sent = session
+            .send_message(outgoing.clone(), &mut transport)
+            .unwrap();
+        let pulled_messages = session
+            .pull_messages(&conversation_id, &mut transport)
+            .unwrap();
+        let pushed_messages = session.receive_transport_pushes(&mut transport).unwrap();
+
+        assert_eq!(sent.status, MessageStatus::SendSuccess);
+        assert_eq!(sent.server_msg_id, Some("server-file-1".to_string()));
+        assert_eq!(pulled_messages, vec![pulled.clone()]);
+        assert_eq!(pushed_messages, vec![pushed.clone()]);
+        assert_eq!(transport.sent, vec!["file-1".to_string()]);
+        assert_eq!(
+            transport.pull_requests,
+            vec![("u1".to_string(), conversation_id.clone())]
+        );
+        assert_eq!(transport.push_requests, vec!["u1".to_string()]);
+
+        assert_eq!(
+            session
+                .domains()
+                .messages
+                .history(
+                    &conversation_id,
+                    openim_types::Pagination {
+                        page_number: 0,
+                        show_number: 10,
+                    },
+                )
+                .unwrap()
+                .len(),
+            3
+        );
+        let conversation = session
+            .domains()
+            .conversations
+            .get_conversation("u1", &conversation_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(conversation.unread_count, 2);
+        assert_eq!(conversation.max_seq, 12);
+        assert_eq!(conversation.latest_message.unwrap().client_msg_id, "push-1");
+
+        let events = events.lock().unwrap();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, SessionEvent::NewMessages { .. }))
+                .count(),
+            2
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, SessionEvent::ConversationChanged { .. }))
+                .count(),
+            3
         );
     }
 
@@ -1146,6 +1382,50 @@ mod tests {
                 .unwrap()
                 .push(format!("close:{}", self.name));
             Ok(())
+        }
+    }
+
+    #[derive(Default)]
+    struct FakeSessionMessageTransport {
+        sent: Vec<String>,
+        pull_requests: Vec<(String, String)>,
+        push_requests: Vec<String>,
+        pulled: Vec<ChatMessage>,
+        pushes: Vec<ChatMessage>,
+        next_seq: i64,
+    }
+
+    impl MessageSender for FakeSessionMessageTransport {
+        fn send_message(&mut self, message: &ChatMessage) -> Result<SendMessageAck> {
+            self.sent.push(message.client_msg_id.clone());
+            let seq = self.next_seq;
+            self.next_seq += 1;
+            Ok(SendMessageAck {
+                server_msg_id: format!("server-{}", message.client_msg_id),
+                seq,
+                send_time: message.send_time + 1000,
+            })
+        }
+    }
+
+    impl SessionMessageTransport for FakeSessionMessageTransport {
+        fn pull_messages(
+            &mut self,
+            owner_user_id: &str,
+            conversation_id: &str,
+        ) -> Result<Vec<ChatMessage>> {
+            self.pull_requests
+                .push((owner_user_id.to_string(), conversation_id.to_string()));
+            let messages = std::mem::take(&mut self.pulled)
+                .into_iter()
+                .filter(|message| message.conversation_id == conversation_id)
+                .collect();
+            Ok(messages)
+        }
+
+        fn pop_push_messages(&mut self, owner_user_id: &str) -> Result<Vec<ChatMessage>> {
+            self.push_requests.push(owner_user_id.to_string());
+            Ok(std::mem::take(&mut self.pushes))
         }
     }
 }
