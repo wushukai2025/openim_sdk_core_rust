@@ -14,6 +14,9 @@ openim-transport-core = { path = "../openim-transport-core" }
 openim-storage-core = { path = "../openim-storage-core" }
 openim-storage-sqlite = { path = "../openim-storage-sqlite" }
 openim-transport-native = { path = "../openim-transport-native" }
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]

@@ -310,6 +310,8 @@ fn c_string_lossy(value: &str) -> CString {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::net::TcpListener as StdTcpListener;
     use std::path::PathBuf;
     use std::sync::mpsc;
     use std::thread;
@@ -352,7 +354,11 @@ mod tests {
 
     #[test]
     fn c_abi_session_lifecycle_uses_opaque_handle() {
-        let api_addr = c_string("https://api.openim.test");
+        let api_addr = c_string(&spawn_parse_token_server(
+            "token",
+            "u1",
+            Platform::Macos.as_i32(),
+        ));
         let ws_addr = c_string(&spawn_transport_server());
         let user_id = c_string("u1");
         let token = c_string("token");
@@ -439,7 +445,11 @@ mod tests {
 
     #[test]
     fn c_abi_listener_dispatches_lifecycle_events() {
-        let api_addr = c_string("https://api.openim.test");
+        let api_addr = c_string(&spawn_parse_token_server(
+            "token",
+            "u1",
+            Platform::Macos.as_i32(),
+        ));
         let ws_addr = c_string(&spawn_transport_server());
         let user_id = c_string("u1");
         let token = c_string("token");
@@ -503,7 +513,11 @@ mod tests {
 
     #[test]
     fn c_abi_create_with_data_dir_opens_native_storage_resource() {
-        let api_addr = c_string("https://api.openim.test");
+        let api_addr = c_string(&spawn_parse_token_server(
+            "token",
+            "u1",
+            Platform::Macos.as_i32(),
+        ));
         let ws_addr = c_string(&spawn_transport_server());
         let user_id = c_string("u1");
         let token = c_string("token");
@@ -646,7 +660,10 @@ mod tests {
         );
 
         let run = Command::new(&binary_path)
-            .env("OPENIM_API_ADDR", "https://api.openim.test")
+            .env(
+                "OPENIM_API_ADDR",
+                spawn_parse_token_server("token", "u1", Platform::Macos.as_i32()),
+            )
             .env("OPENIM_WS_ADDR", spawn_transport_server())
             .env("OPENIM_USER_ID", "u1")
             .env("OPENIM_TOKEN", "token")
@@ -710,6 +727,72 @@ mod tests {
                     }
                 }
             });
+        });
+        rx.recv().unwrap()
+    }
+
+    fn spawn_parse_token_server(
+        expected_token: &str,
+        response_user_id: &str,
+        response_platform_id: i32,
+    ) -> String {
+        let expected_token = expected_token.to_string();
+        let response_user_id = response_user_id.to_string();
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let listener = StdTcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+            tx.send(format!("http://{addr}")).unwrap();
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut request_line = String::new();
+            reader.read_line(&mut request_line).unwrap();
+            assert!(request_line.starts_with("POST /auth/parse_token "));
+
+            let mut content_length = 0_usize;
+            let mut token_header = String::new();
+            let mut operation_id = String::new();
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" {
+                    break;
+                }
+                let lower = line.to_ascii_lowercase();
+                if lower.starts_with("content-length:") {
+                    content_length = line.split_once(':').unwrap().1.trim().parse().unwrap();
+                } else if lower.starts_with("token:") {
+                    token_header = line.split_once(':').unwrap().1.trim().to_string();
+                } else if lower.starts_with("operationid:") {
+                    operation_id = line.split_once(':').unwrap().1.trim().to_string();
+                }
+            }
+
+            let mut body = vec![0_u8; content_length];
+            reader.read_exact(&mut body).unwrap();
+            let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(payload["token"], expected_token);
+            assert_eq!(token_header, expected_token);
+            assert!(!operation_id.is_empty());
+
+            let response_body = serde_json::json!({
+                "errCode": 0,
+                "errMsg": "",
+                "errDlt": "",
+                "data": {
+                    "userID": response_user_id,
+                    "platformID": response_platform_id,
+                    "expireTimeSeconds": 123
+                }
+            })
+            .to_string();
+
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                response_body.len(),
+                response_body
+            );
+            stream.write_all(response.as_bytes()).unwrap();
         });
         rx.recv().unwrap()
     }
