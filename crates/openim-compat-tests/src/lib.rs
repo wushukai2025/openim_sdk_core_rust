@@ -60,6 +60,19 @@ pub struct ReplayEvent {
     pub payload: serde_json::Value,
 }
 
+pub const NATIVE_CALLBACK_THREAD: &str = "sdk_serialized_callback_queue";
+pub const WASM_CALLBACK_THREAD: &str = "host_event_loop";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BindingCallbackContract {
+    pub listener: String,
+    pub method: String,
+    pub native_c_abi: String,
+    pub wasm: String,
+    pub native_thread: &'static str,
+    pub wasm_thread: &'static str,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GoSourceContract {
     pub public_apis: Vec<GoPublicApi>,
@@ -326,6 +339,125 @@ fn replay_event_name(event: &ReplayEvent) -> String {
     event.method.clone()
 }
 
+pub fn binding_callback_contracts(
+    listener_contracts: &[ListenerContract],
+) -> Vec<BindingCallbackContract> {
+    let mut callbacks = Vec::new();
+    for listener in listener_contracts {
+        for signature in &listener.methods {
+            let Some(method) = listener_method_name(signature) else {
+                continue;
+            };
+            callbacks.push(BindingCallbackContract {
+                native_c_abi: format!(
+                    "openim_{}_{}",
+                    to_snake_case(&listener.name),
+                    to_snake_case(method)
+                ),
+                wasm: to_lower_camel(method),
+                listener: listener.name.clone(),
+                method: method.to_string(),
+                native_thread: NATIVE_CALLBACK_THREAD,
+                wasm_thread: WASM_CALLBACK_THREAD,
+            });
+        }
+    }
+    callbacks.sort_by(|left, right| {
+        left.listener
+            .cmp(&right.listener)
+            .then_with(|| left.method.cmp(&right.method))
+    });
+    callbacks
+}
+
+pub fn validate_binding_callback_contracts(
+    callbacks: &[BindingCallbackContract],
+) -> Result<(), String> {
+    if callbacks.is_empty() {
+        return Err("binding callback contract list is empty".to_string());
+    }
+
+    let mut native_names = BTreeSet::new();
+    for callback in callbacks {
+        if callback.listener.is_empty() || callback.method.is_empty() {
+            return Err("binding callback contains empty listener or method".to_string());
+        }
+        if !callback.native_c_abi.starts_with("openim_") {
+            return Err(format!(
+                "native callback name must use openim_ prefix: {}",
+                callback.native_c_abi
+            ));
+        }
+        if !native_names.insert(callback.native_c_abi.as_str()) {
+            return Err(format!(
+                "duplicate native callback name: {}",
+                callback.native_c_abi
+            ));
+        }
+        if callback.wasm.is_empty()
+            || !callback
+                .wasm
+                .chars()
+                .next()
+                .is_some_and(|first| first.is_ascii_lowercase())
+        {
+            return Err(format!(
+                "wasm callback name must be lowerCamelCase: {}",
+                callback.wasm
+            ));
+        }
+        if callback.native_thread != NATIVE_CALLBACK_THREAD {
+            return Err(format!(
+                "unexpected native callback thread policy: {}",
+                callback.native_thread
+            ));
+        }
+        if callback.wasm_thread != WASM_CALLBACK_THREAD {
+            return Err(format!(
+                "unexpected wasm callback thread policy: {}",
+                callback.wasm_thread
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn listener_method_name(signature: &str) -> Option<&str> {
+    let end = signature.find('(')?;
+    let name = signature[..end].trim();
+    (!name.is_empty()).then_some(name)
+}
+
+fn to_lower_camel(name: &str) -> String {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return String::new();
+    };
+    first.to_ascii_lowercase().to_string() + chars.as_str()
+}
+
+fn to_snake_case(name: &str) -> String {
+    let mut out = String::new();
+    let mut prev_was_lower_or_digit = false;
+    for ch in name.chars() {
+        if ch.is_ascii_uppercase() {
+            if prev_was_lower_or_digit {
+                out.push('_');
+            }
+            out.push(ch.to_ascii_lowercase());
+            prev_was_lower_or_digit = false;
+        } else if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+            prev_was_lower_or_digit = ch.is_ascii_lowercase() || ch.is_ascii_digit();
+        } else if !out.ends_with('_') {
+            out.push('_');
+            prev_was_lower_or_digit = false;
+        }
+    }
+    out.trim_matches('_').to_string()
+}
+
 #[cfg(test)]
 fn rust_error_code(name: &str) -> Option<ErrorCode> {
     Some(match name {
@@ -559,6 +691,75 @@ mod tests {
     }
 
     #[test]
+    fn binding_callback_contract_covers_fixture_listener_methods() {
+        let fixture = load_phase0_contract_fixture();
+        let callbacks = binding_callback_contracts(&fixture.listener_contracts);
+        let expected_count = fixture
+            .listener_contracts
+            .iter()
+            .flat_map(|listener| &listener.methods)
+            .filter(|method| method.contains('('))
+            .count();
+
+        assert_eq!(callbacks.len(), expected_count);
+        validate_binding_callback_contracts(&callbacks).expect("valid binding callback contract");
+    }
+
+    #[test]
+    fn binding_callback_contract_freezes_seed_names_and_threads() {
+        let fixture = load_phase0_contract_fixture();
+        let callbacks = binding_callback_contracts(&fixture.listener_contracts);
+
+        assert_binding_callback(
+            &callbacks,
+            "OnConnListener",
+            "OnConnectSuccess",
+            "openim_on_conn_listener_on_connect_success",
+            "onConnectSuccess",
+        );
+        assert_binding_callback(
+            &callbacks,
+            "Base",
+            "OnError",
+            "openim_base_on_error",
+            "onError",
+        );
+        assert_binding_callback(
+            &callbacks,
+            "UploadFileCallback",
+            "UploadPartComplete",
+            "openim_upload_file_callback_upload_part_complete",
+            "uploadPartComplete",
+        );
+    }
+
+    #[test]
+    fn binding_callback_contract_covers_auto_extracted_listener_methods_when_source_exists() {
+        let Some(root) = available_go_sdk_root() else {
+            eprintln!(
+                "skipping binding callback extraction test: OpenIM Go SDK source is not available"
+            );
+            return;
+        };
+
+        let extracted = extract_go_source_contract(root).expect("extract Go SDK contract");
+        let callbacks = binding_callback_contracts(&extracted.listener_contracts);
+
+        assert_eq!(callbacks.len(), 71);
+        validate_binding_callback_contracts(&callbacks).expect("valid binding callback contract");
+        assert!(
+            callbacks
+                .iter()
+                .any(|callback| callback.listener == "OnSignalingListener"
+                    && callback.method == "OnReceiveNewInvitation"
+                    && callback.native_c_abi
+                        == "openim_on_signaling_listener_on_receive_new_invitation"
+                    && callback.wasm == "onReceiveNewInvitation"),
+            "missing signaling callback binding contract"
+        );
+    }
+
+    #[test]
     fn auto_extracts_go_public_api_and_listener_surface_when_source_exists() {
         let Some(root) = available_go_sdk_root() else {
             eprintln!("skipping Go source extraction test: OpenIM Go SDK source is not available");
@@ -697,5 +898,23 @@ mod tests {
 
     fn replay_events_path(name: &str) -> Option<PathBuf> {
         std::env::var_os(name).map(PathBuf::from)
+    }
+
+    fn assert_binding_callback(
+        callbacks: &[BindingCallbackContract],
+        listener: &str,
+        method: &str,
+        native_c_abi: &str,
+        wasm: &str,
+    ) {
+        let callback = callbacks
+            .iter()
+            .find(|callback| callback.listener == listener && callback.method == method)
+            .unwrap_or_else(|| panic!("missing binding callback: {listener}.{method}"));
+
+        assert_eq!(callback.native_c_abi, native_c_abi);
+        assert_eq!(callback.wasm, wasm);
+        assert_eq!(callback.native_thread, NATIVE_CALLBACK_THREAD);
+        assert_eq!(callback.wasm_thread, WASM_CALLBACK_THREAD);
     }
 }
