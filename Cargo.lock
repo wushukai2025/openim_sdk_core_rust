@@ -1201,9 +1201,13 @@ dependencies = [
  "anyhow",
  "clap",
  "openim-compat-tests",
+ "openim-protocol",
  "openim-session",
+ "openim-transport",
  "openim-types",
+ "prost",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]

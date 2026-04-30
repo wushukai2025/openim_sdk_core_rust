@@ -4,6 +4,7 @@ use std::{
     io::{self, Read, Write},
     path::{Path, PathBuf},
     process::Command as ProcessCommand,
+    time::Duration,
 };
 
 use anyhow::{anyhow, Context, Result};
@@ -12,9 +13,15 @@ use openim_compat_tests::{
     compare_replay_scenario, load_phase0_contract_fixture, load_replay_events,
     validate_replay_transcript, ReplayEvent,
 };
+use openim_protocol::{GetMaxSeqResp, WsReqIdentifier};
 use openim_session::{LoginCredentials, OpenImSession, SessionConfig, SessionEvent};
+use openim_transport::{
+    build_get_newest_seq_request, ClientConfig, OpenImWsClient, TransportEvent,
+};
 use openim_types::Platform;
+use prost::Message as ProstMessage;
 use serde_json::json;
+use tokio::runtime::Builder as TokioRuntimeBuilder;
 
 #[derive(Debug, Parser)]
 #[command(version, about = "OpenIM Phase 0 replay transcript capture helper")]
@@ -29,6 +36,7 @@ enum Command {
     CaptureCommand(CaptureCommandArgs),
     CaptureJsonl(CaptureJsonlArgs),
     CaptureRustSession(CaptureRustSessionArgs),
+    CaptureRustTransport(CaptureRustTransportArgs),
     CheckRealGate(CheckRealGateArgs),
     Validate(ValidateArgs),
 }
@@ -85,6 +93,30 @@ struct CaptureRustSessionArgs {
 }
 
 #[derive(Debug, Args)]
+struct CaptureRustTransportArgs {
+    #[arg(long)]
+    output: Option<PathBuf>,
+    #[arg(long, env = "OPENIM_WS_ADDR")]
+    ws_addr: String,
+    #[arg(long, env = "OPENIM_USER_ID")]
+    user_id: String,
+    #[arg(long, env = "OPENIM_TOKEN")]
+    token: String,
+    #[arg(long, env = "OPENIM_PLATFORM_ID", default_value_t = Platform::Web.as_i32())]
+    platform_id: i32,
+    #[arg(long, env = "OPENIM_OPERATION_ID")]
+    operation_id: Option<String>,
+    #[arg(long, default_value_t = false)]
+    no_compression: bool,
+    #[arg(long, default_value_t = 10)]
+    timeout_seconds: u64,
+    #[arg(long, default_value_t = 0)]
+    wait_push_seconds: u64,
+    #[arg(long, default_value_t = false)]
+    require_push: bool,
+}
+
+#[derive(Debug, Args)]
 struct CheckRealGateArgs {
     #[arg(long, default_value = "tools/go-phase0-replay")]
     go_harness: PathBuf,
@@ -106,6 +138,7 @@ fn main() -> Result<()> {
         Command::CaptureCommand(args) => capture_command(args),
         Command::CaptureJsonl(args) => capture_jsonl(args),
         Command::CaptureRustSession(args) => capture_rust_session(args),
+        Command::CaptureRustTransport(args) => capture_rust_transport(args),
         Command::CheckRealGate(args) => check_real_gate(args),
         Command::Validate(args) => validate_transcript(args),
     }
@@ -144,6 +177,7 @@ fn check_real_gate(args: CheckRealGateArgs) -> Result<()> {
         args.go_harness.display()
     );
     println!("go_tool={}", status_label(status.go_tool_available));
+    println!("rust_transport_capture=ok command=capture-rust-transport");
     println!(
         "required_env_missing={}",
         env_list(&status.missing_required_env)
@@ -295,6 +329,16 @@ fn capture_rust_session(args: CaptureRustSessionArgs) -> Result<()> {
     write_output(args.output.as_deref(), &transcript)
 }
 
+fn capture_rust_transport(args: CaptureRustTransportArgs) -> Result<()> {
+    let runtime = TokioRuntimeBuilder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("build tokio runtime failed")?;
+    let events = runtime.block_on(capture_rust_transport_events(&args))?;
+    let transcript = serde_json::to_string_pretty(&events)? + "\n";
+    write_output(args.output.as_deref(), &transcript)
+}
+
 fn validate_transcript(args: ValidateArgs) -> Result<()> {
     let fixture = load_phase0_contract_fixture();
     let events = load_replay_events(&args.events)
@@ -392,6 +436,149 @@ fn capture_rust_session_events(args: &CaptureRustSessionArgs) -> Result<Vec<Repl
     Ok(events)
 }
 
+async fn capture_rust_transport_events(
+    args: &CaptureRustTransportArgs,
+) -> Result<Vec<ReplayEvent>> {
+    let mut events = Vec::new();
+    let mut client = connect_rust_transport(args, &mut events).await?;
+    let timeout = Duration::from_secs(args.timeout_seconds);
+    let (request, _) = build_get_newest_seq_request(client.config())?;
+    let response = client
+        .send_request_wait_response(&request, timeout)
+        .await
+        .context("GetNewestSeq request failed")?;
+
+    if response.err_code != 0 {
+        push_replay_event(
+            &mut events,
+            "rust_transport_request",
+            "RustTransport",
+            "GetNewestSeqError",
+            json!({
+                "errCode": response.err_code,
+                "errMsg": response.err_msg,
+                "msgIncr": response.msg_incr,
+                "operationID": response.operation_id,
+            }),
+        );
+        return Err(anyhow!(
+            "GetNewestSeq failed: {} {}",
+            response.err_code,
+            response.err_msg
+        ));
+    }
+
+    let decoded = GetMaxSeqResp::decode(response.data.as_slice())
+        .context("decode GetNewestSeq response failed")?;
+    push_replay_event(
+        &mut events,
+        "rust_transport_request",
+        "RustTransport",
+        "GetNewestSeqSuccess",
+        json!({
+            "msgIncr": response.msg_incr,
+            "operationID": response.operation_id,
+            "maxSeqCount": decoded.max_seqs.len(),
+            "minSeqCount": decoded.min_seqs.len(),
+        }),
+    );
+
+    let wait_push_seconds = if args.require_push && args.wait_push_seconds == 0 {
+        args.timeout_seconds
+    } else {
+        args.wait_push_seconds
+    };
+    if wait_push_seconds > 0 {
+        let saw_push = capture_optional_push(
+            &mut client,
+            Duration::from_secs(wait_push_seconds),
+            &mut events,
+        )
+        .await?;
+        if args.require_push && !saw_push {
+            return Err(anyhow!(
+                "timed out waiting for PushMsg after {}s",
+                wait_push_seconds
+            ));
+        }
+    }
+
+    Ok(events)
+}
+
+async fn connect_rust_transport(
+    args: &CaptureRustTransportArgs,
+    events: &mut Vec<ReplayEvent>,
+) -> Result<OpenImWsClient> {
+    push_connection_event(events, "OnConnecting", serde_json::Value::Null, true);
+    match OpenImWsClient::connect(rust_transport_config(args)).await {
+        Ok(client) => {
+            push_connection_event(events, "OnConnectSuccess", serde_json::Value::Null, true);
+            Ok(client)
+        }
+        Err(err) => {
+            push_connection_event(
+                events,
+                "OnConnectFailed",
+                json!({ "errMsg": err.to_string() }),
+                false,
+            );
+            Err(anyhow!("rust transport connect failed: {err}"))
+        }
+    }
+}
+
+async fn capture_optional_push(
+    client: &mut OpenImWsClient,
+    duration: Duration,
+    events: &mut Vec<ReplayEvent>,
+) -> Result<bool> {
+    match tokio::time::timeout(duration, async {
+        loop {
+            match client.recv_event().await? {
+                TransportEvent::Push(resp)
+                    if resp.req_identifier == WsReqIdentifier::PushMsg.as_i32() =>
+                {
+                    push_replay_event(
+                        events,
+                        "message_arrival",
+                        "OnAdvancedMsgListener",
+                        "OnRecvNewMessage",
+                        json!({
+                            "operationID": resp.operation_id,
+                            "dataLen": resp.data.len(),
+                        }),
+                    );
+                    return Ok::<_, anyhow::Error>(true);
+                }
+                TransportEvent::Disconnected { reason } => {
+                    return Err(anyhow!("websocket closed while waiting for push: {reason}"));
+                }
+                _ => {}
+            }
+        }
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => Ok(false),
+    }
+}
+
+fn rust_transport_config(args: &CaptureRustTransportArgs) -> ClientConfig {
+    let mut config = ClientConfig::new(
+        args.ws_addr.clone(),
+        args.user_id.clone(),
+        args.token.clone(),
+        args.platform_id,
+    );
+    if let Some(operation_id) = &args.operation_id {
+        config.operation_id = operation_id.clone();
+    }
+    config.compression = !args.no_compression;
+    config
+}
+
 fn session_event_to_replay_event(scenario: &str, event: &SessionEvent) -> ReplayEvent {
     let (method, payload) = match event {
         SessionEvent::Initialized => ("Initialized", serde_json::Value::Null),
@@ -421,6 +608,45 @@ fn session_event_to_replay_event(scenario: &str, event: &SessionEvent) -> Replay
         method: method.to_string(),
         payload,
     }
+}
+
+fn push_connection_event(
+    events: &mut Vec<ReplayEvent>,
+    method: &str,
+    payload: serde_json::Value,
+    include_login_sync: bool,
+) {
+    push_replay_event(
+        events,
+        "connection_status",
+        "OnConnListener",
+        method,
+        payload.clone(),
+    );
+    if include_login_sync {
+        push_replay_event(
+            events,
+            "login_sync_message",
+            "OnConnListener",
+            method,
+            payload,
+        );
+    }
+}
+
+fn push_replay_event(
+    events: &mut Vec<ReplayEvent>,
+    scenario: &str,
+    listener: &str,
+    method: &str,
+    payload: serde_json::Value,
+) {
+    events.push(ReplayEvent {
+        scenario: scenario.to_string(),
+        listener: listener.to_string(),
+        method: method.to_string(),
+        payload,
+    });
 }
 
 #[cfg(test)]
@@ -492,6 +718,58 @@ mod tests {
             .iter()
             .all(|event| event.scenario == "rust_session_lifecycle"
                 && event.listener == "RustSession"));
+    }
+
+    #[test]
+    fn rust_transport_config_uses_operation_id_and_compression_flag() {
+        let args = CaptureRustTransportArgs {
+            output: None,
+            ws_addr: "wss://ws.openim.test".to_string(),
+            user_id: "u1".to_string(),
+            token: "token".to_string(),
+            platform_id: Platform::Web.as_i32(),
+            operation_id: Some("op1".to_string()),
+            no_compression: true,
+            timeout_seconds: 10,
+            wait_push_seconds: 0,
+            require_push: false,
+        };
+
+        let config = rust_transport_config(&args);
+
+        assert_eq!(config.ws_addr, "wss://ws.openim.test");
+        assert_eq!(config.user_id, "u1");
+        assert_eq!(config.token, "token");
+        assert_eq!(config.platform_id, Platform::Web.as_i32());
+        assert_eq!(config.operation_id, "op1");
+        assert!(!config.compression);
+    }
+
+    #[test]
+    fn rust_transport_connection_events_follow_go_listener_names() {
+        let mut events = Vec::new();
+        push_connection_event(&mut events, "OnConnecting", serde_json::Value::Null, true);
+        push_connection_event(
+            &mut events,
+            "OnConnectSuccess",
+            serde_json::Value::Null,
+            true,
+        );
+
+        let names = events
+            .iter()
+            .map(|event| format!("{}:{}:{}", event.scenario, event.listener, event.method))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            names,
+            vec![
+                "connection_status:OnConnListener:OnConnecting",
+                "login_sync_message:OnConnListener:OnConnecting",
+                "connection_status:OnConnListener:OnConnectSuccess",
+                "login_sync_message:OnConnListener:OnConnectSuccess",
+            ]
+        );
     }
 
     #[test]
