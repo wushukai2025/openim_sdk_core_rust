@@ -51,6 +51,15 @@ pub struct ErrorContract {
     pub category: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct ReplayEvent {
+    pub scenario: String,
+    pub listener: String,
+    pub method: String,
+    #[serde(default)]
+    pub payload: serde_json::Value,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GoSourceContract {
     pub public_apis: Vec<GoPublicApi>,
@@ -68,6 +77,11 @@ pub struct GoPublicApi {
 pub fn load_phase0_contract_fixture() -> ContractFixture {
     serde_json::from_str(include_str!("../fixtures/phase0_contract_baseline.json"))
         .expect("phase0 contract fixture must be valid JSON")
+}
+
+pub fn load_replay_events(path: impl AsRef<Path>) -> io::Result<Vec<ReplayEvent>> {
+    let text = fs::read_to_string(path)?;
+    serde_json::from_str(&text).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
 }
 
 pub fn validate_fixture(fixture: &ContractFixture) {
@@ -210,6 +224,106 @@ fn assert_non_empty_unique<'a>(label: &str, values: impl Iterator<Item = &'a Str
         assert!(seen.insert(value), "{label} has duplicate value: {value}");
     }
     assert!(!seen.is_empty(), "{label} list is empty");
+}
+
+pub fn validate_replay_transcript(
+    fixture: &ContractFixture,
+    events: &[ReplayEvent],
+) -> Result<(), String> {
+    for scenario in &fixture.required_scenarios {
+        validate_replay_scenario(fixture, scenario, events)?;
+    }
+    Ok(())
+}
+
+pub fn validate_replay_scenario(
+    fixture: &ContractFixture,
+    scenario_name: &str,
+    events: &[ReplayEvent],
+) -> Result<(), String> {
+    let scenario = fixture
+        .event_scenarios
+        .iter()
+        .find(|scenario| scenario.name == scenario_name)
+        .ok_or_else(|| format!("unknown replay scenario: {scenario_name}"))?;
+    let observed = replay_event_names(events, scenario_name);
+    if observed.is_empty() {
+        return Err(format!(
+            "missing replay events for scenario: {scenario_name}"
+        ));
+    }
+
+    let allowed = scenario
+        .required_order
+        .iter()
+        .chain(scenario.optional_events.iter())
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    for event in &observed {
+        if !allowed.contains(event.as_str()) {
+            return Err(format!(
+                "unexpected event {event} in replay scenario {scenario_name}"
+            ));
+        }
+    }
+
+    let mut cursor = 0;
+    for required in &scenario.required_order {
+        let Some(offset) = observed[cursor..]
+            .iter()
+            .position(|event| event == required)
+        else {
+            return Err(format!(
+                "missing required event {required} in replay scenario {scenario_name}"
+            ));
+        };
+        cursor += offset + 1;
+    }
+
+    Ok(())
+}
+
+pub fn compare_replay_scenario(
+    scenario_name: &str,
+    go_events: &[ReplayEvent],
+    rust_events: &[ReplayEvent],
+) -> Result<(), String> {
+    let go_order = replay_event_names(go_events, scenario_name);
+    let rust_order = replay_event_names(rust_events, scenario_name);
+    if go_order.is_empty() {
+        return Err(format!(
+            "missing Go replay events for scenario: {scenario_name}"
+        ));
+    }
+    if rust_order.is_empty() {
+        return Err(format!(
+            "missing Rust replay events for scenario: {scenario_name}"
+        ));
+    }
+    if go_order != rust_order {
+        return Err(format!(
+            "replay event order mismatch for {scenario_name}: go={go_order:?} rust={rust_order:?}"
+        ));
+    }
+    Ok(())
+}
+
+fn replay_event_names(events: &[ReplayEvent], scenario_name: &str) -> Vec<String> {
+    events
+        .iter()
+        .filter(|event| event.scenario == scenario_name)
+        .map(replay_event_name)
+        .collect()
+}
+
+fn replay_event_name(event: &ReplayEvent) -> String {
+    if event.method.contains('.') {
+        return event.method.clone();
+    }
+    if event.listener == "Base" {
+        return format!("Base.{}", event.method);
+    }
+    event.method.clone()
 }
 
 #[cfg(test)]
@@ -357,6 +471,94 @@ mod tests {
     }
 
     #[test]
+    fn replay_transcript_validates_fixture_required_order() {
+        let fixture = load_phase0_contract_fixture();
+        let events = minimal_required_replay_events(&fixture);
+
+        validate_replay_transcript(&fixture, &events).expect("valid replay transcript");
+    }
+
+    #[test]
+    fn replay_transcript_rejects_missing_required_event() {
+        let fixture = load_phase0_contract_fixture();
+        let mut events = minimal_required_replay_events(&fixture);
+        events.retain(|event| {
+            !(event.scenario == "login_sync_message" && event.method == "OnConnectSuccess")
+        });
+
+        let err = validate_replay_transcript(&fixture, &events)
+            .expect_err("missing required event should fail");
+        assert!(
+            err.contains("OnConnectSuccess"),
+            "unexpected validation error: {err}"
+        );
+    }
+
+    #[test]
+    fn go_and_rust_replay_sequences_can_be_compared() {
+        let fixture = load_phase0_contract_fixture();
+        let go_events = minimal_required_replay_events(&fixture);
+        let rust_events = go_events.clone();
+
+        for scenario in &fixture.required_scenarios {
+            compare_replay_scenario(scenario, &go_events, &rust_events)
+                .expect("matching replay sequence");
+        }
+    }
+
+    #[test]
+    #[ignore = "requires OPENIM_GO_REPLAY_EVENTS captured from a real Go SDK run"]
+    fn real_go_sdk_replay_transcript_matches_phase0_contract() {
+        let Some(path) = replay_events_path("OPENIM_GO_REPLAY_EVENTS") else {
+            eprintln!("skipping Go replay transcript test: OPENIM_GO_REPLAY_EVENTS is not set");
+            return;
+        };
+
+        let fixture = load_phase0_contract_fixture();
+        let events = load_replay_events(path).expect("load Go replay transcript");
+
+        validate_replay_transcript(&fixture, &events).expect("valid Go replay transcript");
+    }
+
+    #[test]
+    #[ignore = "requires OPENIM_RUST_REPLAY_EVENTS captured from a real Rust SDK run"]
+    fn real_rust_replay_transcript_matches_phase0_contract() {
+        let Some(path) = replay_events_path("OPENIM_RUST_REPLAY_EVENTS") else {
+            eprintln!("skipping Rust replay transcript test: OPENIM_RUST_REPLAY_EVENTS is not set");
+            return;
+        };
+
+        let fixture = load_phase0_contract_fixture();
+        let events = load_replay_events(path).expect("load Rust replay transcript");
+
+        validate_replay_transcript(&fixture, &events).expect("valid Rust replay transcript");
+    }
+
+    #[test]
+    #[ignore = "requires OPENIM_GO_REPLAY_EVENTS and OPENIM_RUST_REPLAY_EVENTS"]
+    fn real_go_and_rust_replay_transcripts_match_phase0_sequences() {
+        let Some(go_path) = replay_events_path("OPENIM_GO_REPLAY_EVENTS") else {
+            eprintln!("skipping replay comparison test: OPENIM_GO_REPLAY_EVENTS is not set");
+            return;
+        };
+        let Some(rust_path) = replay_events_path("OPENIM_RUST_REPLAY_EVENTS") else {
+            eprintln!("skipping replay comparison test: OPENIM_RUST_REPLAY_EVENTS is not set");
+            return;
+        };
+
+        let fixture = load_phase0_contract_fixture();
+        let go_events = load_replay_events(go_path).expect("load Go replay transcript");
+        let rust_events = load_replay_events(rust_path).expect("load Rust replay transcript");
+
+        validate_replay_transcript(&fixture, &go_events).expect("valid Go replay transcript");
+        validate_replay_transcript(&fixture, &rust_events).expect("valid Rust replay transcript");
+        for scenario in &fixture.required_scenarios {
+            compare_replay_scenario(scenario, &go_events, &rust_events)
+                .expect("matching Go/Rust replay sequence");
+        }
+    }
+
+    #[test]
     fn auto_extracts_go_public_api_and_listener_surface_when_source_exists() {
         let Some(root) = available_go_sdk_root() else {
             eprintln!("skipping Go source extraction test: OpenIM Go SDK source is not available");
@@ -468,5 +670,32 @@ mod tests {
                 .map(PathBuf::from)
                 .find(|path| path.join("open_im_sdk").exists())
             })
+    }
+
+    fn minimal_required_replay_events(fixture: &ContractFixture) -> Vec<ReplayEvent> {
+        let mut events = Vec::new();
+        for scenario in &fixture.event_scenarios {
+            for method in &scenario.required_order {
+                let (listener, method) = method
+                    .strip_prefix("Base.")
+                    .map(|method| ("Base", method))
+                    .unwrap_or(("RecordedListener", method.as_str()));
+                events.push(replay_event(&scenario.name, listener, method));
+            }
+        }
+        events
+    }
+
+    fn replay_event(scenario: &str, listener: &str, method: &str) -> ReplayEvent {
+        ReplayEvent {
+            scenario: scenario.to_string(),
+            listener: listener.to_string(),
+            method: method.to_string(),
+            payload: serde_json::Value::Null,
+        }
+    }
+
+    fn replay_events_path(name: &str) -> Option<PathBuf> {
+        std::env::var_os(name).map(PathBuf::from)
     }
 }
