@@ -9,10 +9,16 @@ export async function runOpenIMLifecycle(
   await init();
 
   const session = new OpenImWasmSession(apiAddr, wsAddr, 5);
+  const events: Array<{ event: string; payload: unknown }> = [];
+  const listenerID = session.addListener((event: string, payloadJson: string) => {
+    events.push({ event, payload: JSON.parse(payloadJson) });
+  });
+
   session.init();
   session.login(userID, token);
   session.logout();
   session.uninit();
+  session.removeListener(listenerID);
 
   return session.stateCode();
 }

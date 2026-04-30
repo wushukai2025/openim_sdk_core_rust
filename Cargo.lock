@@ -806,6 +806,7 @@ version = "0.1.0"
 dependencies = [
  "openim-session",
  "openim-types",
+ "serde_json",
 ]
 
 [[package]]
@@ -952,8 +953,10 @@ dependencies = [
 name = "openim-wasm"
 version = "0.1.0"
 dependencies = [
+ "js-sys",
  "openim-session",
  "openim-types",
+ "serde_json",
  "wasm-bindgen",
 ]
 

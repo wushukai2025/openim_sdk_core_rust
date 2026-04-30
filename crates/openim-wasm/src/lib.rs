@@ -1,12 +1,24 @@
+#[cfg(target_arch = "wasm32")]
+use std::collections::BTreeMap;
+
+#[cfg(target_arch = "wasm32")]
+use js_sys::Function;
 use openim_session::{LoginCredentials, OpenImSession, SessionConfig, SessionState};
 use openim_types::Platform;
+use serde_json::json;
 use wasm_bindgen::prelude::*;
 
 const WASM_CALLBACK_THREAD_POLICY: &str = "host_event_loop";
+const TRANSPORT_TASK: &str = "transport";
+const SYNC_TASK: &str = "sync";
 
 #[wasm_bindgen]
 pub struct OpenImWasmSession {
     inner: OpenImSession,
+    #[cfg(target_arch = "wasm32")]
+    listeners: BTreeMap<u64, Function>,
+    #[cfg(target_arch = "wasm32")]
+    next_listener_id: u64,
 }
 
 #[wasm_bindgen]
@@ -17,25 +29,61 @@ impl OpenImWasmSession {
             .ok_or_else(|| JsValue::from_str("invalid platform_id"))?;
         let config = SessionConfig::new(platform, api_addr, ws_addr);
         let inner = OpenImSession::new(config).map_err(js_error)?;
-        Ok(Self { inner })
+        Ok(Self {
+            inner,
+            #[cfg(target_arch = "wasm32")]
+            listeners: BTreeMap::new(),
+            #[cfg(target_arch = "wasm32")]
+            next_listener_id: 0,
+        })
     }
 
     pub fn init(&mut self) -> Result<(), JsValue> {
-        self.inner.init().map_err(js_error)
+        let should_emit = matches!(
+            self.inner.state(),
+            SessionState::Created | SessionState::Uninitialized
+        );
+        self.inner.init().map_err(js_error)?;
+        if should_emit {
+            self.emit_wasm_event("initialized", "{}".to_string());
+        }
+        Ok(())
     }
 
     pub fn login(&mut self, user_id: String, token: String) -> Result<(), JsValue> {
+        let payload = json!({ "userId": &user_id }).to_string();
         self.inner
             .login(LoginCredentials::new(user_id, token))
-            .map_err(js_error)
+            .map_err(js_error)?;
+        self.emit_wasm_task_event("taskStarted", TRANSPORT_TASK);
+        self.emit_wasm_task_event("taskStarted", SYNC_TASK);
+        self.emit_wasm_event("loggedIn", payload);
+        Ok(())
     }
 
     pub fn logout(&mut self) -> Result<(), JsValue> {
-        self.inner.logout().map_err(js_error)
+        let payload = self
+            .inner
+            .login_user_id()
+            .map(|user_id| json!({ "userId": user_id }).to_string());
+        self.inner.logout().map_err(js_error)?;
+        if let Some(payload) = payload {
+            self.emit_wasm_task_event("taskStopped", SYNC_TASK);
+            self.emit_wasm_task_event("taskStopped", TRANSPORT_TASK);
+            self.emit_wasm_event("loggedOut", payload);
+        }
+        Ok(())
     }
 
     pub fn uninit(&mut self) -> Result<(), JsValue> {
-        self.inner.uninit().map_err(js_error)
+        let should_stop_tasks = self.inner.login_user_id().is_some();
+        self.inner.uninit().map_err(js_error)?;
+        if should_stop_tasks {
+            self.emit_wasm_task_event("taskStopped", SYNC_TASK);
+            self.emit_wasm_task_event("taskStopped", TRANSPORT_TASK);
+        }
+        self.emit_wasm_event("uninitialized", "{}".to_string());
+        Ok(())
     }
 
     #[wasm_bindgen(js_name = stateCode)]
@@ -52,6 +100,56 @@ impl OpenImWasmSession {
     pub fn callback_thread_policy() -> String {
         WASM_CALLBACK_THREAD_POLICY.to_string()
     }
+
+    #[cfg(target_arch = "wasm32")]
+    #[wasm_bindgen(js_name = addListener)]
+    pub fn add_listener(&mut self, callback: Function) -> u64 {
+        self.next_listener_id += 1;
+        let listener_id = self.next_listener_id;
+        self.listeners.insert(listener_id, callback);
+        self.emit_wasm_event(
+            "listenerRegistered",
+            json!({ "listenerId": listener_id }).to_string(),
+        );
+        listener_id
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    #[wasm_bindgen(js_name = removeListener)]
+    pub fn remove_listener(&mut self, listener_id: u64) -> bool {
+        let removed = self.listeners.remove(&listener_id).is_some();
+        if removed {
+            self.emit_wasm_event(
+                "listenerUnregistered",
+                json!({ "listenerId": listener_id }).to_string(),
+            );
+        }
+        removed
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    #[wasm_bindgen(js_name = listenerCount)]
+    pub fn listener_count(&self) -> usize {
+        self.listeners.len()
+    }
+}
+
+impl OpenImWasmSession {
+    fn emit_wasm_task_event(&self, event: &str, task_name: &str) {
+        self.emit_wasm_event(event, json!({ "name": task_name }).to_string());
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn emit_wasm_event(&self, event: &str, payload_json: String) {
+        let event = JsValue::from_str(event);
+        let payload = JsValue::from_str(&payload_json);
+        for callback in self.listeners.values() {
+            let _ = callback.call2(&JsValue::NULL, &event, &payload);
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn emit_wasm_event(&self, _event: &str, _payload_json: String) {}
 }
 
 fn state_code(state: SessionState) -> i32 {
@@ -105,10 +203,12 @@ mod tests {
     fn web_example_uses_wasm_lifecycle_exports() {
         for export in [
             "OpenImWasmSession",
+            "session.addListener",
             "session.init()",
             "session.login",
             "session.logout()",
             "session.uninit()",
+            "session.removeListener",
             "session.stateCode()",
         ] {
             assert!(WEB_EXAMPLE.contains(export), "missing {export}");

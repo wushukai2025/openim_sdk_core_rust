@@ -1,11 +1,17 @@
 #ifndef OPENIM_FFI_H
 #define OPENIM_FFI_H
 
+#include <stdint.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 typedef struct OpenImFfiSession OpenImFfiSession;
+typedef void (*OpenImFfiSessionEventCallback)(
+    void *user_data,
+    const char *event,
+    const char *payload_json);
 
 enum OpenImFfiCode {
   OPENIM_FFI_OK = 0,
@@ -48,6 +54,15 @@ int openim_session_uninit(OpenImFfiSession *handle);
 
 int openim_session_state(const OpenImFfiSession *handle);
 const char *openim_session_last_error(const OpenImFfiSession *handle);
+
+/* event and payload_json are valid only during the callback call. */
+uint64_t openim_session_register_listener(
+    OpenImFfiSession *handle,
+    OpenImFfiSessionEventCallback callback,
+    void *user_data);
+int openim_session_unregister_listener(
+    OpenImFfiSession *handle,
+    uint64_t listener_id);
 
 #ifdef __cplusplus
 }

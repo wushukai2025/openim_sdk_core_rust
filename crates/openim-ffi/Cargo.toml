@@ -11,3 +11,4 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 [dependencies]
 openim-session = { path = "../openim-session" }
 openim-types = { path = "../openim-types" }
+serde_json.workspace = true

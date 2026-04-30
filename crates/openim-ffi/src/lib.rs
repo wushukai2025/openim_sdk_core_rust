@@ -1,10 +1,14 @@
 use std::ffi::{CStr, CString};
 use std::fmt::Display;
-use std::os::raw::{c_char, c_int};
+use std::os::raw::{c_char, c_int, c_void};
 use std::ptr;
 
-use openim_session::{LoginCredentials, OpenImSession, SessionConfig, SessionState};
+use openim_session::{
+    ListenerId, LoginCredentials, OpenImSession, SessionConfig, SessionEvent, SessionResourceKind,
+    SessionState,
+};
 use openim_types::Platform;
+use serde_json::json;
 
 pub const OPENIM_FFI_OK: c_int = 0;
 pub const OPENIM_FFI_NULL: c_int = 1;
@@ -14,6 +18,9 @@ pub const OPENIM_FFI_ERROR: c_int = 4;
 
 const OPENIM_FFI_VERSION: &[u8] = b"openim-rust-ffi/0.1.0\0";
 const OPENIM_NATIVE_CALLBACK_THREAD: &[u8] = b"sdk_serialized_callback_queue\0";
+
+pub type OpenImFfiSessionEventCallback =
+    unsafe extern "C" fn(user_data: *mut c_void, event: *const c_char, payload_json: *const c_char);
 
 pub struct OpenImFfiSession {
     session: OpenImSession,
@@ -116,6 +123,62 @@ pub unsafe extern "C" fn openim_session_last_error(
     (&*handle).last_error.as_ptr()
 }
 
+#[no_mangle]
+pub unsafe extern "C" fn openim_session_register_listener(
+    handle: *mut OpenImFfiSession,
+    callback: Option<OpenImFfiSessionEventCallback>,
+    user_data: *mut c_void,
+) -> ListenerId {
+    if handle.is_null() {
+        return 0;
+    }
+    let Some(callback) = callback else {
+        set_handle_error(handle, OPENIM_FFI_INVALID_ARGS, "listener callback is null");
+        return 0;
+    };
+
+    let session = &mut *handle;
+    let user_data = user_data as usize;
+    let listener_id = session.session.register_listener(move |event| {
+        let event_name = c_string_lossy(session_event_name(event));
+        let payload_json = c_string_lossy(&session_event_payload_json(event));
+        unsafe {
+            callback(
+                user_data as *mut c_void,
+                event_name.as_ptr(),
+                payload_json.as_ptr(),
+            );
+        }
+    });
+    session.last_error = empty_c_string();
+    listener_id
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn openim_session_unregister_listener(
+    handle: *mut OpenImFfiSession,
+    listener_id: ListenerId,
+) -> c_int {
+    if handle.is_null() {
+        return OPENIM_FFI_NULL;
+    }
+    if listener_id == 0 {
+        return set_handle_error(handle, OPENIM_FFI_INVALID_ARGS, "listener_id is invalid");
+    }
+
+    let session = &mut *handle;
+    if session.session.unregister_listener(listener_id) {
+        session.last_error = empty_c_string();
+        OPENIM_FFI_OK
+    } else {
+        set_handle_error(
+            handle,
+            OPENIM_FFI_INVALID_ARGS,
+            "listener_id was not registered",
+        )
+    }
+}
+
 fn run_session_op<E, F>(handle: *mut OpenImFfiSession, op: F) -> c_int
 where
     E: Display,
@@ -166,6 +229,55 @@ fn state_code(state: SessionState) -> c_int {
     }
 }
 
+fn session_event_name(event: &SessionEvent) -> &'static str {
+    match event {
+        SessionEvent::Initialized => "initialized",
+        SessionEvent::LoggedIn { .. } => "loggedIn",
+        SessionEvent::LoggedOut { .. } => "loggedOut",
+        SessionEvent::Uninitialized => "uninitialized",
+        SessionEvent::ListenerRegistered { .. } => "listenerRegistered",
+        SessionEvent::ListenerUnregistered { .. } => "listenerUnregistered",
+        SessionEvent::TaskStarted { .. } => "taskStarted",
+        SessionEvent::TaskStopped { .. } => "taskStopped",
+        SessionEvent::ResourceOpened { .. } => "resourceOpened",
+        SessionEvent::ResourceClosed { .. } => "resourceClosed",
+        SessionEvent::NewMessages { .. } => "newMessages",
+        SessionEvent::ConversationChanged { .. } => "conversationChanged",
+    }
+}
+
+fn session_event_payload_json(event: &SessionEvent) -> String {
+    match event {
+        SessionEvent::Initialized | SessionEvent::Uninitialized => "{}".to_string(),
+        SessionEvent::LoggedIn { user_id } | SessionEvent::LoggedOut { user_id } => {
+            json!({ "userId": user_id }).to_string()
+        }
+        SessionEvent::ListenerRegistered { listener_id }
+        | SessionEvent::ListenerUnregistered { listener_id } => {
+            json!({ "listenerId": listener_id }).to_string()
+        }
+        SessionEvent::TaskStarted { name } | SessionEvent::TaskStopped { name } => {
+            json!({ "name": name }).to_string()
+        }
+        SessionEvent::ResourceOpened { kind, name }
+        | SessionEvent::ResourceClosed { kind, name } => {
+            json!({ "kind": resource_kind_name(*kind), "name": name }).to_string()
+        }
+        SessionEvent::NewMessages { messages } => json!({ "messages": messages }).to_string(),
+        SessionEvent::ConversationChanged { conversations } => {
+            json!({ "conversations": conversations }).to_string()
+        }
+    }
+}
+
+fn resource_kind_name(kind: SessionResourceKind) -> &'static str {
+    match kind {
+        SessionResourceKind::Storage => "storage",
+        SessionResourceKind::Transport => "transport",
+        SessionResourceKind::Sync => "sync",
+    }
+}
+
 fn empty_c_string() -> CString {
     CString::new("").expect("empty string has no nul byte")
 }
@@ -194,6 +306,15 @@ mod tests {
         "openim_session_logout",
         "openim_session_uninit",
         "openim_session_destroy",
+    ];
+    const LISTENER_EXPORTS: &[&str] = &[
+        "OpenImFfiSessionEventCallback",
+        "openim_session_register_listener",
+        "openim_session_unregister_listener",
+    ];
+    const LISTENER_FUNCTIONS: &[&str] = &[
+        "openim_session_register_listener",
+        "openim_session_unregister_listener",
     ];
 
     fn c_string(value: &str) -> CString {
@@ -274,8 +395,66 @@ mod tests {
     }
 
     #[test]
+    fn c_abi_listener_dispatches_lifecycle_events() {
+        let api_addr = c_string("https://api.openim.test");
+        let ws_addr = c_string("wss://ws.openim.test");
+        let user_id = c_string("u1");
+        let token = c_string("token");
+        let mut events = Vec::<(String, String)>::new();
+
+        unsafe {
+            let handle =
+                openim_session_create(api_addr.as_ptr(), ws_addr.as_ptr(), Platform::Web.as_i32());
+            let listener_id = openim_session_register_listener(
+                handle,
+                Some(collect_event),
+                (&mut events as *mut Vec<(String, String)>).cast(),
+            );
+            assert!(listener_id > 0);
+            assert_eq!(openim_session_init(handle), OPENIM_FFI_OK);
+            assert_eq!(
+                openim_session_login(handle, user_id.as_ptr(), token.as_ptr()),
+                OPENIM_FFI_OK
+            );
+            assert_eq!(openim_session_logout(handle), OPENIM_FFI_OK);
+            assert_eq!(
+                openim_session_unregister_listener(handle, listener_id),
+                OPENIM_FFI_OK
+            );
+            assert_eq!(openim_session_uninit(handle), OPENIM_FFI_OK);
+            openim_session_destroy(handle);
+        }
+
+        let event_names = events
+            .iter()
+            .map(|(event, _)| event.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            event_names,
+            [
+                "listenerRegistered",
+                "initialized",
+                "taskStarted",
+                "taskStarted",
+                "loggedIn",
+                "taskStopped",
+                "taskStopped",
+                "loggedOut",
+            ]
+        );
+        let registered_payload: serde_json::Value = serde_json::from_str(&events[0].1).unwrap();
+        assert_eq!(registered_payload["listenerId"], 1);
+        let login_payload: serde_json::Value = serde_json::from_str(&events[4].1).unwrap();
+        assert_eq!(login_payload["userId"], "u1");
+        assert!(!event_names.contains(&"uninitialized"));
+    }
+
+    #[test]
     fn native_header_and_examples_cover_lifecycle_exports() {
         assert_contains_all(HEADER, LIFECYCLE_EXPORTS);
+        assert_contains_all(HEADER, LISTENER_EXPORTS);
+        assert_contains_all(DESKTOP_EXAMPLE, LISTENER_FUNCTIONS);
+        assert_contains_all(IOS_EXAMPLE, LISTENER_FUNCTIONS);
         assert_contains_all(DESKTOP_EXAMPLE, LIFECYCLE_EXPORTS);
         assert_contains_all(IOS_EXAMPLE, LIFECYCLE_EXPORTS);
         assert_contains_all(ANDROID_JNI_EXAMPLE, LIFECYCLE_EXPORTS);
@@ -300,5 +479,17 @@ mod tests {
         for needle in needles {
             assert!(source.contains(needle), "missing {needle}");
         }
+    }
+
+    unsafe extern "C" fn collect_event(
+        user_data: *mut c_void,
+        event: *const c_char,
+        payload_json: *const c_char,
+    ) {
+        let events = &mut *(user_data as *mut Vec<(String, String)>);
+        events.push((
+            CStr::from_ptr(event).to_str().unwrap().to_string(),
+            CStr::from_ptr(payload_json).to_str().unwrap().to_string(),
+        ));
     }
 }

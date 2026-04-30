@@ -12,6 +12,11 @@ static int check_openim(int code, OpenImFfiSession *session) {
   return code;
 }
 
+static void on_session_event(void *user_data, const char *event, const char *payload_json) {
+  (void)user_data;
+  printf("OpenIM session event: %s %s\n", event, payload_json);
+}
+
 int main(void) {
   OpenImFfiSession *session = openim_session_create(
       "https://api.openim.test",
@@ -20,6 +25,11 @@ int main(void) {
   if (!session) {
     fprintf(stderr, "OpenIM session create failed\n");
     return 1;
+  }
+
+  uint64_t listener_id = openim_session_register_listener(session, on_session_event, NULL);
+  if (listener_id == 0) {
+    return check_openim(OPENIM_FFI_ERROR, session);
   }
 
   int code = openim_session_init(session);
@@ -31,6 +41,9 @@ int main(void) {
   }
   if (code == OPENIM_FFI_OK) {
     code = openim_session_uninit(session);
+  }
+  if (code == OPENIM_FFI_OK) {
+    code = openim_session_unregister_listener(session, listener_id);
   }
 
   int result = check_openim(code, session);

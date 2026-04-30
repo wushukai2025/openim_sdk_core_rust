@@ -11,4 +11,8 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 openim-session = { path = "../openim-session" }
 openim-types = { path = "../openim-types" }
+serde_json.workspace = true
 wasm-bindgen.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys.workspace = true
