@@ -17,7 +17,7 @@ a:has(code[data-code-ref]) {
 
 V2 从“Phase 7 离线核心边界已具备”继续推进到“可替换跨平台 SDK”。当前优先级不是继续扩写离线领域模型，而是补齐契约冻结、真实服务端联调、真实资源装配、绑定层产物和双栈验证。所有真实服务端相关 Gate 都必须使用有效 OpenIM 服务端地址、账号、token、上传端点和可触发推送的测试场景验证，不能由本地 fixture 冒充完成。
 
-当前仓库的 Rust workspace 已落地核心 crate 列表；兼容测试 crate 已在 R2-00 继续补齐，并已具备 Go SDK 源码级 public API/listener surface 自动抽取、replay transcript 校验入口、绑定回调命名/线程语义冻结、replay-capture transcript 采集工具、Rust 本地 session lifecycle 采集入口、Rust 真实 transport probe 采集入口、Go SDK 真实场景回放 harness 源码入口、Go harness 本地编译检查和真实 Gate 就绪检查入口。由于暂时没有真实环境，Phase 0 本地骨架先告一段落，真实回放转为外部 Gate 暂挂；R2-04 已继续推进 native Session 资源句柄闭环；R2-03 已补齐本地可测的对象上传 API、签名 PUT 请求和 mock 上传边界；R2-06 已补 Session 内本地 fake transport 发送、拉取、推送和会话更新闭环；R2-08 已补原生 C ABI 和 wasm 导出 crate 骨架；R2-09 已补 desktop C、iOS Swift、Android Kotlin/JNI、Web TypeScript 生命周期示例源码和示例 API 漂移检查。真实上传端点、真实消息端到端执行、真实平台工程构建/打包和双栈替换仍是外部 Gate。
+当前仓库的 Rust workspace 已落地核心 crate 列表；兼容测试 crate 已在 R2-00 继续补齐，并已具备 Go SDK 源码级 public API/listener surface 自动抽取、replay transcript 校验入口、绑定回调命名/线程语义冻结、replay-capture transcript 采集工具、Rust 本地 session lifecycle 采集入口、Rust 真实 transport probe 采集入口、Go SDK 真实场景回放 harness 源码入口、Go harness 本地编译检查和真实 Gate 就绪检查入口。由于暂时没有真实环境，Phase 0 本地骨架先告一段落，真实回放转为外部 Gate 暂挂；R2-04 已继续推进 native Session 资源句柄闭环；R2-03 已补齐本地可测的对象上传 API、签名 PUT 请求和 mock 上传边界；R2-06 已补 Session 内本地 fake transport 发送、拉取、推送和会话更新闭环；R2-08 已补原生 C ABI 和 wasm 导出 crate 骨架；R2-09 已补 desktop C、iOS Swift、Android Kotlin/JNI、Web TypeScript 生命周期示例源码、通用 session event listener 桥接和示例 API 漂移检查。真实上传端点、真实消息端到端执行、真实平台工程构建/打包、Go SDK 细分 listener 全量映射和双栈替换仍是外部 Gate。
 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="v2-workspace-members">workspace members</code>
 <!-- code-ref: v2-workspace-members -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/Cargo.toml#L2 -->
 
@@ -53,7 +53,7 @@ V2 从“Phase 7 离线核心边界已具备”继续推进到“可替换跨平
 | R2-06 | Phase 7 | 本地已推进，外部 Gate 暂挂 | 已串联上传结果、SendMsg、PullMsg、推送消息和本地会话更新；真实账号端到端联调等待真实环境 | 本地 fake transport 闭环已通过 openim-session 测试，真实账号再端到端联调 |
 | R2-07 | Phase 7 | 外部 Gate | 撤回和已读回执 HTTP API 服务端校验 | 服务端状态、对端回调和本地状态三者一致 |
 | R2-08 | Phase 8 | 本地已推进 | 已创建原生 C ABI 和 wasm 导出 crate 骨架，覆盖句柄模型和基础生命周期 API | openim-ffi 和 openim-wasm 可编译，基础生命周期测试和 wasm32 check 通过 |
-| R2-09 | Phase 8 | 本地示例骨架已推进，平台 Gate 暂挂 | 已补 desktop C、iOS Swift、Android Kotlin/JNI、Web TypeScript 生命周期示例源码；真实平台工程构建、打包和包装产物仍待平台环境 | 示例源码覆盖 Init、Login、Logout、UnInit 并由本地测试防漂移；真实平台工程需在 iOS、Android、桌面和 Web 环境构建验证 |
+| R2-09 | Phase 8 | 本地示例和通用回调桥接已推进，平台 Gate 暂挂 | 已补 desktop C、iOS Swift、Android Kotlin/JNI、Web TypeScript 生命周期示例源码和通用 session event listener 注册/注销；真实平台工程构建、打包、包装产物和 Go SDK 细分 listener 全量映射仍待平台环境 | 示例源码覆盖 listener 注册、Init、Login、Logout、UnInit 和 listener 注销，并由本地测试防漂移；真实平台工程需在 iOS、Android、桌面和 Web 环境构建验证 |
 | R2-10 | Phase 9 | 外部 Gate | 建立 Go 与 Rust 双栈对比报告和差异清单 | 核心场景有对比结果、已知差异、灰度和回滚方案 |
 
 ## 现有未完成 Gate 引用
@@ -116,19 +116,21 @@ V2 从“Phase 7 离线核心边界已具备”继续推进到“可替换跨平
   <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="v2-phase7-open-gate">Phase 7 open Gate</code>
   <!-- code-ref: v2-phase7-open-gate -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/docs/phase-7-message-conversation.md#L178 -->
 
-- Phase 8 绑定层骨架已落地，当前 workspace 已加入 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="v2-openim-ffi-member">openim-ffi</code> 和 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="v2-openim-wasm-member">openim-wasm</code>；C ABI 侧由 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="v2-openim-ffi-handle">OpenImFfiSession</code> 固定 opaque handle，wasm 侧由 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="v2-openim-wasm-session">OpenImWasmSession</code> 暴露基础生命周期。R2-09 已补 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="v2-phase8-ffi-header">openim_ffi.h</code>、<code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="v2-phase8-desktop-example">openim_desktop_lifecycle.c</code>、<code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="v2-phase8-ios-example">OpenIMLifecycleExample.swift</code>、<code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="v2-phase8-android-kotlin-example">OpenIMLifecycleExample.kt</code>、<code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="v2-phase8-android-jni-example">openim_jni_lifecycle.cc</code> 和 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="v2-phase8-web-example">openim_lifecycle.ts</code> 生命周期示例源码；示例 API 漂移由 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="v2-phase8-native-example-test">native_header_and_examples_cover_lifecycle_exports</code> 与 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="v2-phase8-web-example-test">web_example_uses_wasm_lifecycle_exports</code> 固定。真实平台工程构建、平台包装产物和完整 listener 回调派发仍未完成。
+- Phase 8 绑定层骨架已落地，当前 workspace 已加入 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="v2-openim-ffi-member">openim-ffi</code> 和 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="v2-openim-wasm-member">openim-wasm</code>；C ABI 侧由 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="v2-openim-ffi-handle">OpenImFfiSession</code> 固定 opaque handle，wasm 侧由 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="v2-openim-wasm-session">OpenImWasmSession</code> 暴露基础生命周期。R2-09 已补 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="v2-phase8-ffi-header">openim_ffi.h</code>、<code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="v2-phase8-desktop-example">openim_desktop_lifecycle.c</code>、<code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="v2-phase8-ios-example">OpenIMLifecycleExample.swift</code>、<code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="v2-phase8-android-kotlin-example">OpenIMLifecycleExample.kt</code>、<code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="v2-phase8-android-jni-example">openim_jni_lifecycle.cc</code> 和 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="v2-phase8-web-example">openim_lifecycle.ts</code> 生命周期示例源码；通用 session event listener 由 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="v2-phase8-ffi-register-listener">openim_session_register_listener</code> 与 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="v2-phase8-wasm-add-listener">addListener</code> 暴露；示例 API 漂移由 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="v2-phase8-native-example-test">native_header_and_examples_cover_lifecycle_exports</code> 与 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="v2-phase8-web-example-test">web_example_uses_wasm_lifecycle_exports</code> 固定。真实平台工程构建、平台包装产物和 Go SDK 细分 listener 全量映射仍未完成。
   <!-- code-ref: v2-openim-ffi-member -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/Cargo.toml#L6 -->
   <!-- code-ref: v2-openim-wasm-member -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/Cargo.toml#L19 -->
-  <!-- code-ref: v2-openim-ffi-handle -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-ffi/src/lib.rs#L18 -->
-  <!-- code-ref: v2-openim-wasm-session -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-wasm/src/lib.rs#L8 -->
+  <!-- code-ref: v2-openim-ffi-handle -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-ffi/src/lib.rs#L25 -->
+  <!-- code-ref: v2-openim-wasm-session -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-wasm/src/lib.rs#L16 -->
   <!-- code-ref: v2-phase8-ffi-header -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-ffi/include/openim_ffi.h#L1 -->
   <!-- code-ref: v2-phase8-desktop-example -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/examples/desktop-c/openim_desktop_lifecycle.c#L1 -->
-  <!-- code-ref: v2-phase8-ios-example -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/examples/ios-swift/OpenIMLifecycleExample.swift#L8 -->
+  <!-- code-ref: v2-phase8-ios-example -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/examples/ios-swift/OpenIMLifecycleExample.swift#L18 -->
   <!-- code-ref: v2-phase8-android-kotlin-example -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/examples/android-kotlin/OpenIMLifecycleExample.kt#L3 -->
   <!-- code-ref: v2-phase8-android-jni-example -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/examples/android-kotlin/openim_jni_lifecycle.cc#L1 -->
   <!-- code-ref: v2-phase8-web-example -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/examples/web/openim_lifecycle.ts#L1 -->
-  <!-- code-ref: v2-phase8-native-example-test -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-ffi/src/lib.rs#L277 -->
-  <!-- code-ref: v2-phase8-web-example-test -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-wasm/src/lib.rs#L105 -->
+  <!-- code-ref: v2-phase8-ffi-register-listener -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-ffi/src/lib.rs#L127 -->
+  <!-- code-ref: v2-phase8-wasm-add-listener -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-wasm/src/lib.rs#L106 -->
+  <!-- code-ref: v2-phase8-native-example-test -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-ffi/src/lib.rs#L453 -->
+  <!-- code-ref: v2-phase8-web-example-test -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-wasm/src/lib.rs#L203 -->
   <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="v2-phase8-report">Phase 8 bindings report</code>
   <!-- code-ref: v2-phase8-report -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/docs/phase-8-bindings.md#L1 -->
 
@@ -140,7 +142,7 @@ V2 从“Phase 7 离线核心边界已具备”继续推进到“可替换跨平
 3. 文件 HTTP 上传客户端边界已推进到可 mock 验证，当前领域层已有 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="v2-file-upload-boundary">FileUploadClient</code> 和签名 PUT 请求边界；真实 endpoint 后续跟随外部 Gate 验证。
    <!-- code-ref: v2-file-upload-boundary -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-domain/src/file.rs#L276 -->
 4. 本地 fake transport 的消息发送、拉取、推送闭环已落地，Phase 7 已从单服务边界推进到 Session 内链路闭环。
-5. 平台示例源码骨架已落地，下一步进入真实平台构建/打包与双栈验证。平台示例必须后续在 iOS、Android、Web 和桌面环境单独验证，不能用绑定 crate 单元测试替代。
+5. 平台示例源码骨架和通用 session event listener 桥接已落地，下一步进入真实平台构建/打包、Go SDK 细分 listener 全量映射与双栈验证。平台示例必须后续在 iOS、Android、Web 和桌面环境单独验证，不能用绑定 crate 单元测试替代。
 
 ## 外部环境需求
 
@@ -161,7 +163,7 @@ V2 从“Phase 7 离线核心边界已具备”继续推进到“可替换跨平
 - 新增 Phase 5 对象上传 API、签名 PUT 请求和 mock 上传验证。
 - 新增 Phase 7 Session 内本地 fake transport 消息发送、拉取、推送和会话更新闭环。
 - 新增 Phase 8 原生 C ABI 和 wasm 导出 crate 骨架、句柄模型和基础生命周期 API。
-- 新增 Phase 8 平台示例源码骨架和示例 API 漂移检查，覆盖 desktop C、iOS Swift、Android Kotlin/JNI 和 Web TypeScript 生命周期调用。
+- 新增 Phase 8 平台示例源码骨架、通用 session event listener 桥接和示例 API 漂移检查，覆盖 desktop C、iOS Swift、Android Kotlin/JNI 和 Web TypeScript 生命周期调用。
 - 保持 Rust workspace 检查通过。
 
 本轮不能宣称完成以下项：
@@ -169,4 +171,5 @@ V2 从“Phase 7 离线核心边界已具备”继续推进到“可替换跨平
 - 真实服务端协议 Gate。
 - 真实上传端到端 Gate。
 - 真实平台示例构建、打包和交付 Gate。
+- Go SDK 细分 listener 全量映射和平台包装层派发 Gate。
 - Go 与 Rust 双栈替换 Gate。
