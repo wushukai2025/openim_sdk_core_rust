@@ -29,8 +29,18 @@ enum Command {
     CaptureCommand(CaptureCommandArgs),
     CaptureJsonl(CaptureJsonlArgs),
     CaptureRustSession(CaptureRustSessionArgs),
+    CheckRealGate(CheckRealGateArgs),
     Validate(ValidateArgs),
 }
+
+const REAL_GATE_REQUIRED_ENV: &[&str] = &[
+    "OPENIM_API_ADDR",
+    "OPENIM_WS_ADDR",
+    "OPENIM_USER_ID",
+    "OPENIM_TOKEN",
+];
+
+const REAL_GATE_TRANSCRIPT_ENV: &[&str] = &["OPENIM_GO_REPLAY_EVENTS", "OPENIM_RUST_REPLAY_EVENTS"];
 
 #[derive(Debug, Args)]
 struct CompareArgs {
@@ -75,6 +85,14 @@ struct CaptureRustSessionArgs {
 }
 
 #[derive(Debug, Args)]
+struct CheckRealGateArgs {
+    #[arg(long, default_value = "tools/go-phase0-replay")]
+    go_harness: PathBuf,
+    #[arg(long)]
+    require_transcripts: bool,
+}
+
+#[derive(Debug, Args)]
 struct ValidateArgs {
     #[arg(long, env = "OPENIM_REPLAY_EVENTS")]
     events: PathBuf,
@@ -88,8 +106,123 @@ fn main() -> Result<()> {
         Command::CaptureCommand(args) => capture_command(args),
         Command::CaptureJsonl(args) => capture_jsonl(args),
         Command::CaptureRustSession(args) => capture_rust_session(args),
+        Command::CheckRealGate(args) => check_real_gate(args),
         Command::Validate(args) => validate_transcript(args),
     }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct RealGateStatus {
+    go_harness_exists: bool,
+    go_tool_available: bool,
+    missing_required_env: Vec<&'static str>,
+    missing_transcript_env: Vec<&'static str>,
+    require_transcripts: bool,
+}
+
+impl RealGateStatus {
+    fn is_ready(&self) -> bool {
+        self.go_harness_exists
+            && self.go_tool_available
+            && self.missing_required_env.is_empty()
+            && (!self.require_transcripts || self.missing_transcript_env.is_empty())
+    }
+}
+
+fn check_real_gate(args: CheckRealGateArgs) -> Result<()> {
+    let status = real_gate_status(
+        &args.go_harness,
+        args.require_transcripts,
+        |name| std::env::var(name).ok(),
+        command_available("go"),
+    );
+
+    println!("phase0_real_gate_ready={}", status.is_ready());
+    println!(
+        "go_harness={} path={}",
+        status_label(status.go_harness_exists),
+        args.go_harness.display()
+    );
+    println!("go_tool={}", status_label(status.go_tool_available));
+    println!(
+        "required_env_missing={}",
+        env_list(&status.missing_required_env)
+    );
+    if args.require_transcripts {
+        println!(
+            "transcript_env_missing={}",
+            env_list(&status.missing_transcript_env)
+        );
+    } else {
+        println!("transcript_env_missing=not_required");
+    }
+
+    if !status.is_ready() {
+        return Err(anyhow!("phase0 real gate is not ready"));
+    }
+    Ok(())
+}
+
+fn real_gate_status<F>(
+    go_harness: &Path,
+    require_transcripts: bool,
+    lookup: F,
+    go_tool_available: bool,
+) -> RealGateStatus
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let missing_required_env = missing_env(REAL_GATE_REQUIRED_ENV, &lookup);
+    let missing_transcript_env = if require_transcripts {
+        missing_env(REAL_GATE_TRANSCRIPT_ENV, &lookup)
+    } else {
+        Vec::new()
+    };
+
+    RealGateStatus {
+        go_harness_exists: go_harness.exists(),
+        go_tool_available,
+        missing_required_env,
+        missing_transcript_env,
+        require_transcripts,
+    }
+}
+
+fn missing_env<F>(names: &'static [&'static str], lookup: &F) -> Vec<&'static str>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    names
+        .iter()
+        .copied()
+        .filter(|name| {
+            lookup(name)
+                .map(|value| value.trim().is_empty())
+                .unwrap_or(true)
+        })
+        .collect()
+}
+
+fn command_available(program: &str) -> bool {
+    ProcessCommand::new(program)
+        .arg("version")
+        .output()
+        .is_ok_and(|output| output.status.success())
+}
+
+fn status_label(ok: bool) -> &'static str {
+    if ok {
+        "ok"
+    } else {
+        "missing"
+    }
+}
+
+fn env_list(values: &[&str]) -> String {
+    if values.is_empty() {
+        return "none".to_string();
+    }
+    values.join(",")
 }
 
 fn compare_transcripts(args: CompareArgs) -> Result<()> {
@@ -380,6 +513,39 @@ mod tests {
         let _ = fs::remove_file(rust_path);
     }
 
+    #[test]
+    fn real_gate_status_reports_missing_inputs() {
+        let status = real_gate_status(&temp_path("missing-harness"), true, |_| None, false);
+
+        assert!(!status.is_ready());
+        assert!(!status.go_harness_exists);
+        assert!(!status.go_tool_available);
+        assert_eq!(status.missing_required_env, REAL_GATE_REQUIRED_ENV);
+        assert_eq!(status.missing_transcript_env, REAL_GATE_TRANSCRIPT_ENV);
+    }
+
+    #[test]
+    fn real_gate_status_accepts_required_inputs() {
+        let harness_path = temp_dir("go-harness");
+        fs::create_dir_all(&harness_path).unwrap();
+        let env = |name: &str| match name {
+            "OPENIM_API_ADDR" => Some("https://api.openim.test".to_string()),
+            "OPENIM_WS_ADDR" => Some("wss://ws.openim.test".to_string()),
+            "OPENIM_USER_ID" => Some("u1".to_string()),
+            "OPENIM_TOKEN" => Some("token".to_string()),
+            "OPENIM_GO_REPLAY_EVENTS" => Some("go-events.json".to_string()),
+            "OPENIM_RUST_REPLAY_EVENTS" => Some("rust-events.json".to_string()),
+            _ => None,
+        };
+
+        let status = real_gate_status(&harness_path, true, env, true);
+
+        assert!(status.is_ready());
+        assert!(status.missing_required_env.is_empty());
+        assert!(status.missing_transcript_env.is_empty());
+        let _ = fs::remove_dir_all(harness_path);
+    }
+
     fn minimal_required_events(fixture: &openim_compat_tests::ContractFixture) -> Vec<ReplayEvent> {
         let mut events = Vec::new();
         for scenario in &fixture.event_scenarios {
@@ -402,6 +568,13 @@ mod tests {
     fn temp_path(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
             "openim-replay-capture-{name}-{}.json",
+            std::process::id()
+        ))
+    }
+
+    fn temp_dir(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "openim-replay-capture-{name}-{}",
             std::process::id()
         ))
     }
