@@ -7,6 +7,7 @@ use openim_session::{
     ListenerId, LoginCredentials, OpenImSession, SessionConfig, SessionEvent, SessionResourceKind,
     SessionState,
 };
+use openim_session_native::NativeSessionResourceAdapter;
 use openim_types::Platform;
 use serde_json::json;
 
@@ -43,6 +44,16 @@ pub unsafe extern "C" fn openim_session_create(
     ws_addr: *const c_char,
     platform_id: c_int,
 ) -> *mut OpenImFfiSession {
+    openim_session_create_with_data_dir(api_addr, ws_addr, platform_id, ptr::null())
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn openim_session_create_with_data_dir(
+    api_addr: *const c_char,
+    ws_addr: *const c_char,
+    platform_id: c_int,
+    data_dir: *const c_char,
+) -> *mut OpenImFfiSession {
     let Ok(api_addr) = c_str(api_addr) else {
         return ptr::null_mut();
     };
@@ -53,8 +64,18 @@ pub unsafe extern "C" fn openim_session_create(
         return ptr::null_mut();
     };
 
-    let config = SessionConfig::new(platform, api_addr, ws_addr);
-    match OpenImSession::new(config) {
+    let mut config = SessionConfig::new(platform, api_addr, ws_addr);
+    if !data_dir.is_null() {
+        let Ok(data_dir) = c_str(data_dir) else {
+            return ptr::null_mut();
+        };
+        config = config.with_data_dir(data_dir);
+    }
+
+    match OpenImSession::with_resource_adapter(
+        config,
+        Box::new(NativeSessionResourceAdapter::new()),
+    ) {
         Ok(session) => Box::into_raw(Box::new(OpenImFfiSession {
             session,
             last_error: empty_c_string(),
@@ -289,6 +310,7 @@ fn c_string_lossy(value: &str) -> CString {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     const HEADER: &str = include_str!("../include/openim_ffi.h");
     const DESKTOP_EXAMPLE: &str =
@@ -307,6 +329,7 @@ mod tests {
         "openim_session_uninit",
         "openim_session_destroy",
     ];
+    const DATA_DIR_CREATE_EXPORTS: &[&str] = &["openim_session_create_with_data_dir"];
     const LISTENER_EXPORTS: &[&str] = &[
         "OpenImFfiSessionEventCallback",
         "openim_session_register_listener",
@@ -329,8 +352,11 @@ mod tests {
         let token = c_string("token");
 
         unsafe {
-            let handle =
-                openim_session_create(api_addr.as_ptr(), ws_addr.as_ptr(), Platform::Web.as_i32());
+            let handle = openim_session_create(
+                api_addr.as_ptr(),
+                ws_addr.as_ptr(),
+                Platform::Macos.as_i32(),
+            );
             assert!(!handle.is_null());
             assert_eq!(openim_session_state(handle), 0);
             assert_eq!(openim_session_init(handle), OPENIM_FFI_OK);
@@ -362,8 +388,11 @@ mod tests {
         let token = c_string("token");
 
         unsafe {
-            let handle =
-                openim_session_create(api_addr.as_ptr(), ws_addr.as_ptr(), Platform::Web.as_i32());
+            let handle = openim_session_create(
+                api_addr.as_ptr(),
+                ws_addr.as_ptr(),
+                Platform::Macos.as_i32(),
+            );
             assert_eq!(
                 openim_session_login(handle, user_id.as_ptr(), token.as_ptr()),
                 OPENIM_FFI_ERROR
@@ -380,9 +409,17 @@ mod tests {
     fn c_abi_rejects_null_or_invalid_inputs() {
         let api_addr = c_string("https://api.openim.test");
         let ws_addr = c_string("wss://ws.openim.test");
+        let invalid_utf8_dir = [0xff_u8, 0x00];
 
         unsafe {
             assert!(openim_session_create(api_addr.as_ptr(), ws_addr.as_ptr(), 99).is_null());
+            assert!(openim_session_create_with_data_dir(
+                api_addr.as_ptr(),
+                ws_addr.as_ptr(),
+                Platform::Macos.as_i32(),
+                invalid_utf8_dir.as_ptr().cast()
+            )
+            .is_null());
             assert_eq!(openim_session_state(ptr::null()), -1);
             assert_eq!(openim_session_init(ptr::null_mut()), OPENIM_FFI_NULL);
             assert_eq!(
@@ -403,8 +440,11 @@ mod tests {
         let mut events = Vec::<(String, String)>::new();
 
         unsafe {
-            let handle =
-                openim_session_create(api_addr.as_ptr(), ws_addr.as_ptr(), Platform::Web.as_i32());
+            let handle = openim_session_create(
+                api_addr.as_ptr(),
+                ws_addr.as_ptr(),
+                Platform::Macos.as_i32(),
+            );
             let listener_id = openim_session_register_listener(
                 handle,
                 Some(collect_event),
@@ -436,22 +476,60 @@ mod tests {
                 "initialized",
                 "taskStarted",
                 "taskStarted",
+                "resourceOpened",
+                "resourceOpened",
                 "loggedIn",
                 "taskStopped",
                 "taskStopped",
+                "resourceClosed",
+                "resourceClosed",
                 "loggedOut",
             ]
         );
         let registered_payload: serde_json::Value = serde_json::from_str(&events[0].1).unwrap();
         assert_eq!(registered_payload["listenerId"], 1);
-        let login_payload: serde_json::Value = serde_json::from_str(&events[4].1).unwrap();
+        let first_resource_payload: serde_json::Value = serde_json::from_str(&events[4].1).unwrap();
+        assert_eq!(first_resource_payload["kind"], "transport");
+        let login_payload: serde_json::Value = serde_json::from_str(&events[6].1).unwrap();
         assert_eq!(login_payload["userId"], "u1");
         assert!(!event_names.contains(&"uninitialized"));
     }
 
     #[test]
+    fn c_abi_create_with_data_dir_opens_native_storage_resource() {
+        let api_addr = c_string("https://api.openim.test");
+        let ws_addr = c_string("wss://ws.openim.test");
+        let user_id = c_string("u1");
+        let token = c_string("token");
+        let data_dir = unique_temp_dir("ffi-data-dir");
+        let data_dir_c = c_string(data_dir.to_string_lossy().as_ref());
+        let expected_db_path = data_dir.join("OpenIM_v3_u1.db");
+
+        unsafe {
+            let handle = openim_session_create_with_data_dir(
+                api_addr.as_ptr(),
+                ws_addr.as_ptr(),
+                Platform::Macos.as_i32(),
+                data_dir_c.as_ptr(),
+            );
+            assert!(!handle.is_null());
+            assert_eq!(openim_session_init(handle), OPENIM_FFI_OK);
+            assert_eq!(
+                openim_session_login(handle, user_id.as_ptr(), token.as_ptr()),
+                OPENIM_FFI_OK
+            );
+            assert!(expected_db_path.exists());
+            assert_eq!(openim_session_logout(handle), OPENIM_FFI_OK);
+            openim_session_destroy(handle);
+        }
+
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
     fn native_header_and_examples_cover_lifecycle_exports() {
         assert_contains_all(HEADER, LIFECYCLE_EXPORTS);
+        assert_contains_all(HEADER, DATA_DIR_CREATE_EXPORTS);
         assert_contains_all(HEADER, LISTENER_EXPORTS);
         assert_contains_all(DESKTOP_EXAMPLE, LISTENER_FUNCTIONS);
         assert_contains_all(IOS_EXAMPLE, LISTENER_FUNCTIONS);
@@ -485,8 +563,10 @@ mod tests {
                 "OPENIM_WS_ADDR",
                 "OPENIM_USER_ID",
                 "OPENIM_TOKEN",
+                "OPENIM_DATA_DIR",
             ],
         );
+        assert_contains_all(DESKTOP_EXAMPLE, DATA_DIR_CREATE_EXPORTS);
     }
 
     #[cfg(target_os = "macos")]
@@ -528,6 +608,20 @@ mod tests {
         fs::create_dir_all(&temp_dir).unwrap();
         let binary_path = temp_dir.join("openim_desktop_lifecycle");
 
+        let build = Command::new("cargo")
+            .current_dir(&workspace_dir)
+            .arg("build")
+            .arg("-p")
+            .arg("openim-ffi")
+            .output()
+            .unwrap();
+        assert!(
+            build.status.success(),
+            "cargo build failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&build.stdout),
+            String::from_utf8_lossy(&build.stderr)
+        );
+
         let compile = Command::new("clang")
             .current_dir(&workspace_dir)
             .arg("-I")
@@ -550,6 +644,7 @@ mod tests {
             .env("OPENIM_WS_ADDR", "wss://ws.openim.test")
             .env("OPENIM_USER_ID", "u1")
             .env("OPENIM_TOKEN", "token")
+            .env("OPENIM_DATA_DIR", temp_dir.join("db"))
             .output()
             .unwrap();
         assert!(
@@ -562,12 +657,22 @@ mod tests {
         let stdout = String::from_utf8_lossy(&run.stdout);
         assert!(stdout.contains("OpenIM session event: listenerRegistered"));
         assert!(stdout.contains("OpenIM session event: initialized {}"));
+        assert!(stdout.contains("OpenIM session event: resourceOpened"));
         assert!(stdout.contains("OpenIM session event: loggedIn {\"userId\":\"u1\"}"));
+        assert!(stdout.contains("OpenIM session event: resourceClosed"));
         assert!(stdout.contains("OpenIM session event: loggedOut {\"userId\":\"u1\"}"));
         assert!(stdout.contains("OpenIM session event: uninitialized {}"));
 
         let _ = fs::remove_file(&binary_path);
         let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    fn unique_temp_dir(label: &str) -> PathBuf {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("openim-ffi-{label}-{}-{now}", std::process::id()))
     }
 
     fn assert_contains_all(source: &str, needles: &[&str]) {

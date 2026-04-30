@@ -805,6 +805,7 @@ name = "openim-ffi"
 version = "0.1.0"
 dependencies = [
  "openim-session",
+ "openim-session-native",
  "openim-types",
  "serde_json",
 ]

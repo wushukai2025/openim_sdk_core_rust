@@ -42,6 +42,11 @@ OpenImFfiSession *openim_session_create(
     const char *api_addr,
     const char *ws_addr,
     int platform_id);
+OpenImFfiSession *openim_session_create_with_data_dir(
+    const char *api_addr,
+    const char *ws_addr,
+    int platform_id,
+    const char *data_dir);
 void openim_session_destroy(OpenImFfiSession *handle);
 
 int openim_session_init(OpenImFfiSession *handle);

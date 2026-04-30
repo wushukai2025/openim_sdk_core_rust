@@ -28,11 +28,13 @@ int main(void) {
   const char *ws_addr = env_or_default("OPENIM_WS_ADDR", "wss://ws.openim.test");
   const char *user_id = env_or_default("OPENIM_USER_ID", "u1");
   const char *token = env_or_default("OPENIM_TOKEN", "token");
+  const char *data_dir = getenv("OPENIM_DATA_DIR");
 
-  OpenImFfiSession *session = openim_session_create(
+  OpenImFfiSession *session = openim_session_create_with_data_dir(
       api_addr,
       ws_addr,
-      OPENIM_PLATFORM_MACOS);
+      OPENIM_PLATFORM_MACOS,
+      data_dir);
   if (!session) {
     fprintf(stderr, "OpenIM session create failed\n");
     return 1;
