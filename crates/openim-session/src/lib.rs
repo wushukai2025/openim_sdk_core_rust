@@ -4,15 +4,17 @@ use std::path::PathBuf;
 use openim_domain::{
     conversation::{ConversationInfo, ConversationService},
     group::GroupService,
-    message::{ChatMessage, MessageSender, MessageService},
+    message::{ChatMessage, MessageContent, MessageSender, MessageService},
     relation::RelationService,
     user::UserService,
 };
 use openim_errors::{OpenImError, Result};
 use openim_storage_core::{openim_db_file, openim_indexeddb_name};
-use openim_transport_core::TransportConfig;
-use openim_types::{Platform, UserId};
-use serde::Serialize;
+use openim_transport_core::{
+    decode_push_messages_response, IncomingTransportMessage, TransportConfig, TransportEvent,
+};
+use openim_types::{MessageContentType, MessageStatus, Platform, SessionType, UserId};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub type ListenerId = u64;
@@ -227,6 +229,10 @@ pub struct SessionResourceInfo {
 
 pub trait SessionResourceHandle: Send {
     fn close(&mut self) -> Result<()>;
+
+    fn drain_transport_events(&mut self) -> Result<Vec<TransportEvent>> {
+        Ok(Vec::new())
+    }
 }
 
 pub struct SessionResource {
@@ -267,6 +273,10 @@ impl SessionResource {
 
     fn close(&mut self) -> Result<()> {
         self.handle.close()
+    }
+
+    fn drain_transport_events(&mut self) -> Result<Vec<TransportEvent>> {
+        self.handle.drain_transport_events()
     }
 }
 
@@ -363,6 +373,14 @@ impl SessionRuntimeResources {
         }
 
         Ok(closed)
+    }
+
+    fn drain_transport_events(&mut self) -> Result<Vec<TransportEvent>> {
+        let mut events = Vec::new();
+        for resource in &mut self.resources {
+            events.extend(resource.drain_transport_events()?);
+        }
+        Ok(events)
     }
 }
 
@@ -773,16 +791,34 @@ impl OpenImSession {
             return Ok(pushed);
         }
 
-        let mut received = Vec::with_capacity(pushed.len());
-        for message in pushed {
-            ensure_message_visible_to_owner(&owner_user_id, &message)?;
-            received.push(self.domains.messages.receive_message(message)?);
+        self.apply_transport_messages(owner_user_id.as_str(), pushed)
+    }
+
+    pub fn pump_transport_events(&mut self) -> Result<Vec<ChatMessage>> {
+        let owner_user_id = self.logged_in_user_id()?;
+        let events = self.runtime_resources_mut()?.drain_transport_events()?;
+        let mut pushed_messages = Vec::new();
+
+        for event in events {
+            if let TransportEvent::Push(resp) = event {
+                let messages = decode_push_messages_response(&resp).map_err(|err| {
+                    OpenImError::sdk_internal(format!(
+                        "decode transport push messages failed: {err}"
+                    ))
+                })?;
+                for message in messages {
+                    if let Some(decoded) = self.decode_transport_message(message)? {
+                        pushed_messages.push(decoded);
+                    }
+                }
+            }
         }
 
-        let conversations = self.apply_messages_to_conversations(&owner_user_id, &received)?;
-        self.dispatch_new_messages(received.clone())?;
-        self.dispatch_conversation_events(conversations)?;
-        Ok(received)
+        if pushed_messages.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        self.apply_transport_messages(owner_user_id.as_str(), pushed_messages)
     }
 
     pub fn state(&self) -> SessionState {
@@ -840,6 +876,23 @@ impl OpenImSession {
 
     fn emit(&self, event: SessionEvent) {
         self.listeners.emit(&event);
+    }
+
+    fn apply_transport_messages(
+        &mut self,
+        owner_user_id: &str,
+        pushed: Vec<ChatMessage>,
+    ) -> Result<Vec<ChatMessage>> {
+        let mut received = Vec::with_capacity(pushed.len());
+        for message in pushed {
+            ensure_message_visible_to_owner(owner_user_id, &message)?;
+            received.push(self.domains.messages.receive_message(message)?);
+        }
+
+        let conversations = self.apply_messages_to_conversations(owner_user_id, &received)?;
+        self.dispatch_new_messages(received.clone())?;
+        self.dispatch_conversation_events(conversations)?;
+        Ok(received)
     }
 
     fn dispatch_conversation_events(&self, batch: ConversationDispatchBatch) -> Result<()> {
@@ -909,6 +962,78 @@ impl OpenImSession {
         }
         Ok(())
     }
+
+    fn runtime_resources_mut(&mut self) -> Result<&mut SessionRuntimeResources> {
+        self.ensure_logged_in()?;
+        self.runtime_resources
+            .as_mut()
+            .ok_or_else(|| OpenImError::sdk_internal("runtime resources missing"))
+    }
+
+    fn decode_transport_message(
+        &self,
+        message: IncomingTransportMessage,
+    ) -> Result<Option<ChatMessage>> {
+        let session_type = SessionType::from_i32(message.session_type).ok_or_else(|| {
+            OpenImError::args(format!(
+                "unsupported transport session_type {}",
+                message.session_type
+            ))
+        })?;
+        let content_type = MessageContentType::from_i32(message.content_type).ok_or_else(|| {
+            OpenImError::args(format!(
+                "unsupported transport content_type {}",
+                message.content_type
+            ))
+        })?;
+        let content = match content_type {
+            MessageContentType::Text => MessageContent::Text {
+                content: serde_json::from_str::<TransportTextContent>(&message.content_json)
+                    .map_err(|err| {
+                        OpenImError::args(format!("invalid text message content json: {err}"))
+                    })?
+                    .content,
+            },
+            MessageContentType::Typing => return Ok(None),
+            _ => {
+                return Err(OpenImError::args(format!(
+                    "transport content_type {} is not supported yet",
+                    message.content_type
+                )));
+            }
+        };
+
+        let target_id = match session_type {
+            SessionType::Single | SessionType::Notification => message.recv_id.clone(),
+            SessionType::WriteGroup | SessionType::ReadGroup => message.group_id.clone(),
+        };
+        let mut decoded = ChatMessage::incoming(
+            message.client_msg_id,
+            message.server_msg_id,
+            message.send_id,
+            target_id,
+            session_type,
+            content,
+            message.seq,
+            message.send_time,
+        )?;
+        decoded.create_time = if message.create_time > 0 {
+            message.create_time
+        } else {
+            decoded.send_time
+        };
+        decoded.is_read = message.is_read;
+        decoded.status =
+            MessageStatus::from_i32(message.status).unwrap_or(MessageStatus::SendSuccess);
+        decoded.attached_info = message.attached_info;
+        decoded.ex = message.ex;
+        Ok(Some(decoded))
+    }
+}
+
+#[derive(Deserialize)]
+struct TransportTextContent {
+    content: String,
 }
 
 fn ensure_outgoing_owner(owner_user_id: &str, message: &ChatMessage) -> Result<()> {
@@ -977,7 +1102,10 @@ mod tests {
         message::{ChatMessage, MessageContent, MessageSender, MessageSnapshot, SendMessageAck},
         user::UserProfile,
     };
+    use openim_protocol::{pb_sdkws, GeneralWsResp, WsReqIdentifier};
+    use openim_transport_core::TransportEvent;
     use openim_types::{MessageStatus, SessionType};
+    use prost::Message;
 
     use super::*;
 
@@ -1420,6 +1548,64 @@ mod tests {
     }
 
     #[test]
+    fn pump_transport_events_receives_native_push_messages() {
+        let events = Arc::new(Mutex::new(Vec::<SessionEvent>::new()));
+        let captured = events.clone();
+        let adapter = TransportEventAdapter {
+            events: vec![push_transport_event(
+                pb_sdkws::MsgData {
+                    send_id: "u2".to_string(),
+                    recv_id: "u1".to_string(),
+                    client_msg_id: "push-1".to_string(),
+                    server_msg_id: "server-push-1".to_string(),
+                    session_type: SessionType::Single.as_i32(),
+                    content_type: MessageContentType::Text.as_i32(),
+                    content: br#"{"content":"pushed"}"#.to_vec(),
+                    seq: 8,
+                    send_time: 80,
+                    create_time: 70,
+                    status: MessageStatus::SendSuccess.as_i32(),
+                    is_read: false,
+                    ..Default::default()
+                },
+                "si_u1_u2",
+            )],
+        };
+        let mut session =
+            OpenImSession::with_resource_adapter(config(), Box::new(adapter)).unwrap();
+        session.register_listener(move |event| {
+            captured.lock().unwrap().push(event.clone());
+        });
+
+        session.init().unwrap();
+        session.login(credentials()).unwrap();
+
+        let pushed = session.pump_transport_events().unwrap();
+
+        assert_eq!(pushed.len(), 1);
+        assert_eq!(pushed[0].client_msg_id, "push-1");
+        assert_eq!(pushed[0].content.summary(), "pushed");
+
+        let conversation = session
+            .domains()
+            .conversations
+            .get_conversation("u1", "si_u1_u2")
+            .unwrap()
+            .unwrap();
+        assert_eq!(conversation.unread_count, 1);
+        assert_eq!(conversation.max_seq, 8);
+
+        let events = events.lock().unwrap();
+        assert!(events.iter().any(
+            |event| matches!(event, SessionEvent::NewMessages { messages } if messages.len() == 1)
+        ));
+        assert!(events.iter().any(|event| matches!(event, SessionEvent::NewConversations { conversations } if conversations.len() == 1)));
+        assert!(events.contains(&SessionEvent::TotalUnreadCountChanged {
+            total_unread_count: 1,
+        }));
+    }
+
+    #[test]
     fn resource_adapter_receives_lifecycle_boundaries() {
         let calls = Arc::new(Mutex::new(Vec::new()));
         let adapter = RecordingAdapter {
@@ -1622,6 +1808,46 @@ mod tests {
         }
     }
 
+    struct TransportEventAdapter {
+        events: Vec<TransportEvent>,
+    }
+
+    impl SessionResourceAdapter for TransportEventAdapter {
+        fn init(&mut self, _config: &SessionConfig) -> Result<()> {
+            Ok(())
+        }
+
+        fn login(
+            &mut self,
+            _config: &SessionConfig,
+            credentials: &LoginCredentials,
+            transport: &TransportConfig,
+            storage: &StorageTarget,
+        ) -> Result<SessionRuntimeResources> {
+            let mut resources = SessionRuntimeResources::new(
+                credentials.user_id.clone(),
+                transport.clone(),
+                storage.clone(),
+            )?;
+            resources.add_resource(SessionResource::new(
+                SessionResourceKind::Transport,
+                "queued-transport",
+                QueuedTransportHandle {
+                    events: std::mem::take(&mut self.events),
+                },
+            )?);
+            Ok(resources)
+        }
+
+        fn logout(&mut self, _user_id: &str) -> Result<()> {
+            Ok(())
+        }
+
+        fn uninit(&mut self) -> Result<()> {
+            Ok(())
+        }
+    }
+
     struct RecordingHandle {
         name: String,
         calls: Arc<Mutex<Vec<String>>>,
@@ -1634,6 +1860,20 @@ mod tests {
                 .unwrap()
                 .push(format!("close:{}", self.name));
             Ok(())
+        }
+    }
+
+    struct QueuedTransportHandle {
+        events: Vec<TransportEvent>,
+    }
+
+    impl SessionResourceHandle for QueuedTransportHandle {
+        fn close(&mut self) -> Result<()> {
+            Ok(())
+        }
+
+        fn drain_transport_events(&mut self) -> Result<Vec<TransportEvent>> {
+            Ok(std::mem::take(&mut self.events))
         }
     }
 
@@ -1679,5 +1919,30 @@ mod tests {
             self.push_requests.push(owner_user_id.to_string());
             Ok(std::mem::take(&mut self.pushes))
         }
+    }
+
+    fn push_transport_event(message: pb_sdkws::MsgData, conversation_id: &str) -> TransportEvent {
+        let mut data = Vec::new();
+        pb_sdkws::PushMessages {
+            msgs: std::collections::HashMap::from([(
+                conversation_id.to_string(),
+                pb_sdkws::PullMsgs {
+                    msgs: vec![message],
+                    ..Default::default()
+                },
+            )]),
+            ..Default::default()
+        }
+        .encode(&mut data)
+        .unwrap();
+
+        TransportEvent::Push(GeneralWsResp {
+            req_identifier: WsReqIdentifier::PushMsg.as_i32(),
+            err_code: 0,
+            err_msg: String::new(),
+            msg_incr: String::new(),
+            operation_id: "op1".to_string(),
+            data,
+        })
     }
 }

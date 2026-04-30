@@ -974,9 +974,11 @@ version = "0.1.0"
 dependencies = [
  "openim-domain",
  "openim-errors",
+ "openim-protocol",
  "openim-storage-core",
  "openim-transport-core",
  "openim-types",
+ "prost",
  "serde",
  "serde_json",
 ]
@@ -987,12 +989,14 @@ version = "0.1.0"
 dependencies = [
  "futures-util",
  "openim-errors",
+ "openim-protocol",
  "openim-session",
  "openim-storage-core",
  "openim-storage-sqlite",
  "openim-transport-core",
  "openim-transport-native",
  "openim-types",
+ "prost",
  "reqwest",
  "serde",
  "serde_json",

@@ -218,6 +218,7 @@ mod native {
 
     struct NativeTransportTaskResource {
         shutdown_tx: Option<Sender<()>>,
+        event_rx: Receiver<TransportEvent>,
         join_handle: Option<thread::JoinHandle<Result<()>>>,
     }
 
@@ -236,6 +237,14 @@ mod native {
                 )),
             }
         }
+
+        fn drain_transport_events(&mut self) -> Result<Vec<TransportEvent>> {
+            let mut events = Vec::new();
+            while let Ok(event) = self.event_rx.try_recv() {
+                events.push(event);
+            }
+            Ok(events)
+        }
     }
 
     fn start_native_transport_task(
@@ -243,13 +252,16 @@ mod native {
     ) -> Result<NativeTransportTaskResource> {
         let (ready_tx, ready_rx) = mpsc::channel::<Result<()>>();
         let (shutdown_tx, shutdown_rx) = mpsc::channel::<()>();
+        let (event_tx, event_rx) = mpsc::channel::<TransportEvent>();
         let transport = transport.clone();
-        let join_handle =
-            thread::spawn(move || run_native_transport_worker(transport, ready_tx, shutdown_rx));
+        let join_handle = thread::spawn(move || {
+            run_native_transport_worker(transport, ready_tx, shutdown_rx, event_tx)
+        });
 
         match ready_rx.recv() {
             Ok(Ok(())) => Ok(NativeTransportTaskResource {
                 shutdown_tx: Some(shutdown_tx),
+                event_rx,
                 join_handle: Some(join_handle),
             }),
             Ok(Err(err)) => {
@@ -269,6 +281,7 @@ mod native {
         transport: TransportConfig,
         ready_tx: Sender<Result<()>>,
         shutdown_rx: Receiver<()>,
+        event_tx: Sender<TransportEvent>,
     ) -> Result<()> {
         let runtime = TokioRuntimeBuilder::new_current_thread()
             .enable_all()
@@ -298,7 +311,8 @@ mod native {
                 match tokio::time::timeout(TRANSPORT_WORKER_POLL_INTERVAL, client.recv_event())
                     .await
                 {
-                    Ok(Ok(TransportEvent::Disconnected { .. })) => {
+                    Ok(Ok(event @ TransportEvent::Disconnected { .. })) => {
+                        let _ = event_tx.send(event);
                         client
                             .reconnect(ReconnectPolicy::default())
                             .await
@@ -309,7 +323,14 @@ mod native {
                                 )
                             })?;
                     }
-                    Ok(Ok(_)) => {}
+                    Ok(Ok(event)) => {
+                        if !matches!(
+                            event,
+                            TransportEvent::HeartbeatPing | TransportEvent::HeartbeatPong
+                        ) {
+                            let _ = event_tx.send(event);
+                        }
+                    }
                     Ok(Err(err)) => {
                         return Err(OpenImError::sdk_internal(format!(
                             "native transport worker recv failed: {err}"
@@ -417,10 +438,12 @@ mod tests {
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     use futures_util::{SinkExt, StreamExt};
+    use openim_protocol::{pb_sdkws, GeneralWsResp, WsReqIdentifier};
     use openim_session::{
         LoginCredentials, OpenImSession, SessionResourceInfo, SessionResourceKind, SessionState,
     };
     use openim_types::Platform;
+    use prost::Message;
     use tokio::net::TcpListener;
     use tokio_tungstenite::{accept_async, tungstenite::Message as WsMessage};
 
@@ -527,6 +550,43 @@ mod tests {
         let _ = fs::remove_dir_all(data_dir);
     }
 
+    #[test]
+    fn native_adapter_pumps_transport_push_into_session_events() {
+        let data_dir = unique_data_dir("push");
+        let api_addr = spawn_parse_token_server("token", "u1", Platform::Macos.as_i32(), 0);
+        let ws_addr = spawn_push_transport_server();
+        let config = native_config(&data_dir, &api_addr, &ws_addr);
+        let mut session =
+            OpenImSession::with_resource_adapter(config, Box::new(NativeSessionResourceAdapter))
+                .unwrap();
+
+        session.init().unwrap();
+        session.login(LoginCredentials::new("u1", "token")).unwrap();
+
+        let mut pushed = Vec::new();
+        for _ in 0..50 {
+            pushed = session.pump_transport_events().unwrap();
+            if !pushed.is_empty() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+
+        assert_eq!(pushed.len(), 1);
+        assert_eq!(pushed[0].client_msg_id, "push-1");
+        assert_eq!(pushed[0].content.summary(), "native push");
+        let conversation = session
+            .domains()
+            .conversations
+            .get_conversation("u1", "si_u1_u2")
+            .unwrap()
+            .unwrap();
+        assert_eq!(conversation.unread_count, 1);
+
+        session.logout().unwrap();
+        let _ = fs::remove_dir_all(data_dir);
+    }
+
     fn native_config(
         data_dir: &std::path::Path,
         api_addr: &str,
@@ -617,6 +677,42 @@ mod tests {
         (rx.recv().unwrap(), accepted_count)
     }
 
+    fn spawn_push_transport_server() -> String {
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            runtime.block_on(async move {
+                let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let addr = listener.local_addr().unwrap();
+                tx.send(format!("ws://{addr}/msg_gateway")).unwrap();
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut ws = accept_async(stream).await.unwrap();
+                ws.send(WsMessage::Text(r#"{"errCode":0}"#.into()))
+                    .await
+                    .unwrap();
+                ws.send(WsMessage::Binary(encode_push_frame().into()))
+                    .await
+                    .unwrap();
+
+                while let Some(frame) = ws.next().await {
+                    match frame.unwrap() {
+                        WsMessage::Text(text) if text.contains(r#""type":"ping""#) => {
+                            ws.send(WsMessage::Text(r#"{"type":"pong"}"#.into()))
+                                .await
+                                .unwrap();
+                        }
+                        WsMessage::Close(_) => break,
+                        _ => {}
+                    }
+                }
+            });
+        });
+        rx.recv().unwrap()
+    }
+
     fn spawn_parse_token_server(
         expected_token: &str,
         response_user_id: &str,
@@ -699,6 +795,47 @@ mod tests {
             .unwrap()
             .as_nanos();
         std::env::temp_dir().join(format!("openim-session-native-{tag}-{nanos}"))
+    }
+
+    fn encode_push_frame() -> Vec<u8> {
+        let mut data = Vec::new();
+        pb_sdkws::PushMessages {
+            msgs: std::collections::HashMap::from([(
+                "si_u1_u2".to_string(),
+                pb_sdkws::PullMsgs {
+                    msgs: vec![pb_sdkws::MsgData {
+                        send_id: "u2".to_string(),
+                        recv_id: "u1".to_string(),
+                        client_msg_id: "push-1".to_string(),
+                        server_msg_id: "server-push-1".to_string(),
+                        session_type: 1,
+                        content_type: 101,
+                        content: br#"{"content":"native push"}"#.to_vec(),
+                        seq: 6,
+                        send_time: 60,
+                        create_time: 50,
+                        status: 2,
+                        is_read: false,
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+            )]),
+            ..Default::default()
+        }
+        .encode(&mut data)
+        .unwrap();
+
+        let payload = serde_json::to_vec(&GeneralWsResp {
+            req_identifier: WsReqIdentifier::PushMsg.as_i32(),
+            err_code: 0,
+            err_msg: String::new(),
+            msg_incr: String::new(),
+            operation_id: "op1".to_string(),
+            data,
+        })
+        .unwrap();
+        openim_protocol::gzip_compress(&payload).unwrap()
     }
 
     fn wait_for_counter(counter: &Arc<AtomicUsize>, expected: usize) {

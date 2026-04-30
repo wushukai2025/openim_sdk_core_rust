@@ -23,3 +23,5 @@ tokio.workspace = true
 futures-util.workspace = true
 tokio-tungstenite.workspace = true
 openim-types = { path = "../openim-types" }
+openim-protocol = { path = "../openim-protocol" }
+prost.workspace = true

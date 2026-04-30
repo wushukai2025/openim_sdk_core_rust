@@ -13,3 +13,7 @@ openim-transport-core = { path = "../openim-transport-core" }
 openim-types = { path = "../openim-types" }
 serde.workspace = true
 serde_json.workspace = true
+
+[dev-dependencies]
+openim-protocol = { path = "../openim-protocol" }
+prost.workspace = true

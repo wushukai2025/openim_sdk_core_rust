@@ -86,6 +86,25 @@ pub enum TransportEvent {
     RequestTimeout { msg_incr: String },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IncomingTransportMessage {
+    pub send_id: String,
+    pub recv_id: String,
+    pub group_id: String,
+    pub client_msg_id: String,
+    pub server_msg_id: String,
+    pub session_type: i32,
+    pub content_type: i32,
+    pub content_json: String,
+    pub seq: i64,
+    pub send_time: i64,
+    pub create_time: i64,
+    pub status: i32,
+    pub is_read: bool,
+    pub attached_info: String,
+    pub ex: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HeartbeatConfig {
     pub interval: Duration,
@@ -363,6 +382,22 @@ pub fn decode_pull_conversation_last_message_response(
     decode_response_data(resp)
 }
 
+pub fn decode_push_messages_response(
+    resp: &GeneralWsResp,
+) -> Result<Vec<IncomingTransportMessage>> {
+    let push: pb_sdkws::PushMessages = decode_response_data(resp)?;
+    let mut messages = Vec::new();
+    append_pull_messages_map(&mut messages, push.msgs);
+    append_pull_messages_map(&mut messages, push.notification_msgs);
+    messages.sort_by(|left, right| {
+        left.seq
+            .cmp(&right.seq)
+            .then_with(|| left.send_time.cmp(&right.send_time))
+            .then_with(|| left.client_msg_id.cmp(&right.client_msg_id))
+    });
+    Ok(messages)
+}
+
 pub fn route_envelope(resp: GeneralWsResp, pending: &mut PendingRequests) -> TransportEvent {
     if resp.req_identifier == WsReqIdentifier::PushMsg.as_i32() {
         return TransportEvent::Push(resp);
@@ -427,6 +462,33 @@ where
     );
 
     Ok((envelope, msg_incr))
+}
+
+fn append_pull_messages_map(
+    out: &mut Vec<IncomingTransportMessage>,
+    pull_messages: std::collections::HashMap<String, pb_sdkws::PullMsgs>,
+) {
+    for messages in pull_messages.into_values() {
+        for message in messages.msgs {
+            out.push(IncomingTransportMessage {
+                send_id: message.send_id,
+                recv_id: message.recv_id,
+                group_id: message.group_id,
+                client_msg_id: message.client_msg_id,
+                server_msg_id: message.server_msg_id,
+                session_type: message.session_type,
+                content_type: message.content_type,
+                content_json: String::from_utf8_lossy(&message.content).into_owned(),
+                seq: message.seq,
+                send_time: message.send_time,
+                create_time: message.create_time,
+                status: message.status,
+                is_read: message.is_read,
+                attached_info: message.attached_info,
+                ex: message.ex,
+            });
+        }
+    }
 }
 
 #[cfg(test)]
@@ -654,6 +716,56 @@ mod tests {
             ..resp
         };
         assert!(decode_send_msg_response(&err).is_err());
+    }
+
+    #[test]
+    fn decode_push_messages_response_flattens_proto_payload() {
+        let mut data = Vec::new();
+        pb_sdkws::PushMessages {
+            msgs: std::collections::HashMap::from([(
+                "si_u1_u2".to_string(),
+                pb_sdkws::PullMsgs {
+                    msgs: vec![pb_sdkws::MsgData {
+                        send_id: "u2".to_string(),
+                        recv_id: "u1".to_string(),
+                        client_msg_id: "client-1".to_string(),
+                        server_msg_id: "server-1".to_string(),
+                        session_type: 1,
+                        content_type: 101,
+                        content: br#"{"content":"hello"}"#.to_vec(),
+                        seq: 2,
+                        send_time: 20,
+                        create_time: 10,
+                        status: 2,
+                        is_read: false,
+                        attached_info: "{}".to_string(),
+                        ex: String::new(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+            )]),
+            ..Default::default()
+        }
+        .encode(&mut data)
+        .unwrap();
+
+        let resp = GeneralWsResp {
+            req_identifier: WsReqIdentifier::PushMsg.as_i32(),
+            err_code: 0,
+            err_msg: String::new(),
+            msg_incr: String::new(),
+            operation_id: "op1".to_string(),
+            data,
+        };
+
+        let messages = decode_push_messages_response(&resp).unwrap();
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].send_id, "u2");
+        assert_eq!(messages[0].recv_id, "u1");
+        assert_eq!(messages[0].content_json, r#"{"content":"hello"}"#);
+        assert_eq!(messages[0].content_type, 101);
     }
 
     fn test_config() -> TransportConfig {
