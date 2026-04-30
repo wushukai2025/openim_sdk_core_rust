@@ -455,6 +455,7 @@ mod tests {
         assert_contains_all(HEADER, LISTENER_EXPORTS);
         assert_contains_all(DESKTOP_EXAMPLE, LISTENER_FUNCTIONS);
         assert_contains_all(IOS_EXAMPLE, LISTENER_FUNCTIONS);
+        assert_contains_all(ANDROID_JNI_EXAMPLE, LISTENER_FUNCTIONS);
         assert_contains_all(DESKTOP_EXAMPLE, LIFECYCLE_EXPORTS);
         assert_contains_all(IOS_EXAMPLE, LIFECYCLE_EXPORTS);
         assert_contains_all(ANDROID_JNI_EXAMPLE, LIFECYCLE_EXPORTS);
@@ -467,6 +468,9 @@ mod tests {
                 "openimSessionLogout",
                 "openimSessionUninit",
                 "openimSessionDestroy",
+                "openimSessionRegisterListener",
+                "openimSessionUnregisterListener",
+                "OpenIMSessionEventListener",
             ],
         );
         assert!(HEADER.contains("OpenImFfiSession"));
