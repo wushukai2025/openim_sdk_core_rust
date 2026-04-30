@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/openim-errors",
+    "crates/openim-compat-tests",
     "crates/openim-domain",
     "crates/openim-protocol",
     "crates/openim-session",

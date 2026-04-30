@@ -1,0 +1,13 @@
+[package]
+name = "openim-compat-tests"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+openim-errors = { path = "../openim-errors" }
+serde.workspace = true
+serde_json.workspace = true
+

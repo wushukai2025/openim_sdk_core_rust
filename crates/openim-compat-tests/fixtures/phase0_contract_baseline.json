@@ -1,0 +1,339 @@
+{
+  "version": 1,
+  "source": {
+    "go_sdk_root": "/Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core",
+    "captured_from": [
+      "open_im_sdk/init_login.go",
+      "open_im_sdk/listener.go",
+      "open_im_sdk/conversation_msg.go",
+      "open_im_sdk/third.go",
+      "open_im_sdk_callback/callback_client.go",
+      "pkg/sdkerrs/code.go",
+      "pkg/sdkerrs/predefine.go"
+    ]
+  },
+  "api_contracts": [
+    {
+      "name": "InitSDK",
+      "category": "lifecycle",
+      "callback": "OnConnListener",
+      "return_kind": "bool",
+      "requires_login": false
+    },
+    {
+      "name": "Login",
+      "category": "lifecycle",
+      "callback": "Base",
+      "return_kind": "callback",
+      "requires_login": false
+    },
+    {
+      "name": "Logout",
+      "category": "lifecycle",
+      "callback": "Base",
+      "return_kind": "callback",
+      "requires_login": true
+    },
+    {
+      "name": "SetConversationListener",
+      "category": "listener",
+      "callback": "OnConversationListener",
+      "return_kind": "void",
+      "requires_login": false
+    },
+    {
+      "name": "SetAdvancedMsgListener",
+      "category": "listener",
+      "callback": "OnAdvancedMsgListener",
+      "return_kind": "void",
+      "requires_login": false
+    },
+    {
+      "name": "SendMessage",
+      "category": "message",
+      "callback": "SendMsgCallBack",
+      "return_kind": "callback",
+      "requires_login": true
+    },
+    {
+      "name": "UploadFile",
+      "category": "file",
+      "callback": "UploadFileCallback",
+      "return_kind": "callback",
+      "requires_login": true
+    }
+  ],
+  "listener_contracts": [
+    {
+      "name": "Base",
+      "methods": [
+        "OnError(errCode:int32,errMsg:string)",
+        "OnSuccess(data:string)"
+      ]
+    },
+    {
+      "name": "SendMsgCallBack",
+      "methods": [
+        "OnError(errCode:int32,errMsg:string)",
+        "OnSuccess(data:string)",
+        "OnProgress(progress:int)"
+      ]
+    },
+    {
+      "name": "OnConnListener",
+      "methods": [
+        "OnConnecting()",
+        "OnConnectSuccess()",
+        "OnConnectFailed(errCode:int32,errMsg:string)",
+        "OnKickedOffline()",
+        "OnUserTokenExpired()",
+        "OnUserTokenInvalid(errMsg:string)"
+      ]
+    },
+    {
+      "name": "OnConversationListener",
+      "methods": [
+        "OnSyncServerStart(reinstalled:bool)",
+        "OnSyncServerFinish(reinstalled:bool)",
+        "OnSyncServerProgress(progress:int)",
+        "OnSyncServerFailed(reinstalled:bool)",
+        "OnNewConversation(conversationList:string)",
+        "OnConversationChanged(conversationList:string)",
+        "OnTotalUnreadMessageCountChanged(totalUnreadCount:int32)",
+        "OnConversationUserInputStatusChanged(change:string)"
+      ]
+    },
+    {
+      "name": "OnAdvancedMsgListener",
+      "methods": [
+        "OnRecvNewMessage(message:string)",
+        "OnRecvC2CReadReceipt(msgReceiptList:string)",
+        "OnNewRecvMessageRevoked(messageRevoked:string)",
+        "OnRecvOfflineNewMessage(message:string)",
+        "OnMsgDeleted(message:string)",
+        "OnRecvOnlineOnlyMessage(message:string)"
+      ]
+    },
+    {
+      "name": "UploadFileCallback",
+      "methods": [
+        "Open(size:int64)",
+        "PartSize(partSize:int64,num:int)",
+        "HashPartProgress(index:int,size:int64,partHash:string)",
+        "HashPartComplete(partsHash:string,fileHash:string)",
+        "UploadID(uploadID:string)",
+        "UploadPartComplete(index:int,partSize:int64,partHash:string)",
+        "UploadComplete(fileSize:int64,streamSize:int64,storageSize:int64)",
+        "Complete(size:int64,url:string,typ:int)"
+      ]
+    },
+    {
+      "name": "UploadLogProgress",
+      "methods": [
+        "OnProgress(current:int64,size:int64)"
+      ]
+    }
+  ],
+  "event_scenarios": [
+    {
+      "name": "connection_status",
+      "required_order": [
+        "OnConnecting",
+        "OnConnectSuccess"
+      ],
+      "optional_events": [
+        "OnConnectFailed",
+        "OnKickedOffline",
+        "OnUserTokenExpired",
+        "OnUserTokenInvalid"
+      ]
+    },
+    {
+      "name": "login_sync_message",
+      "required_order": [
+        "OnConnecting",
+        "OnConnectSuccess",
+        "OnSyncServerStart",
+        "OnSyncServerFinish"
+      ],
+      "optional_events": [
+        "OnSyncServerProgress",
+        "OnNewConversation",
+        "OnConversationChanged",
+        "OnTotalUnreadMessageCountChanged",
+        "OnRecvNewMessage",
+        "OnRecvOfflineNewMessage"
+      ]
+    },
+    {
+      "name": "logout",
+      "required_order": [
+        "Base.OnSuccess"
+      ],
+      "optional_events": [
+        "OnKickedOffline",
+        "OnUserTokenExpired",
+        "OnUserTokenInvalid"
+      ]
+    },
+    {
+      "name": "message_arrival",
+      "required_order": [
+        "OnRecvNewMessage"
+      ],
+      "optional_events": [
+        "OnConversationChanged",
+        "OnTotalUnreadMessageCountChanged"
+      ]
+    },
+    {
+      "name": "file_upload_progress",
+      "required_order": [
+        "Open",
+        "PartSize",
+        "HashPartComplete",
+        "UploadID",
+        "UploadPartComplete",
+        "UploadComplete",
+        "Complete"
+      ],
+      "optional_events": [
+        "HashPartProgress"
+      ]
+    }
+  ],
+  "error_contracts": [
+    {
+      "name": "NetworkError",
+      "code": 10000,
+      "category": "common"
+    },
+    {
+      "name": "NetworkTimeoutError",
+      "code": 10001,
+      "category": "common"
+    },
+    {
+      "name": "ArgsError",
+      "code": 10002,
+      "category": "common"
+    },
+    {
+      "name": "CtxDeadlineExceededError",
+      "code": 10003,
+      "category": "common"
+    },
+    {
+      "name": "UnknownCode",
+      "code": 10005,
+      "category": "common"
+    },
+    {
+      "name": "SdkInternalError",
+      "code": 10006,
+      "category": "common"
+    },
+    {
+      "name": "NoUpdateError",
+      "code": 10007,
+      "category": "common"
+    },
+    {
+      "name": "SDKNotInitError",
+      "code": 10008,
+      "category": "common"
+    },
+    {
+      "name": "SDKNotLoginError",
+      "code": 10009,
+      "category": "common"
+    },
+    {
+      "name": "UserIDNotFoundError",
+      "code": 10100,
+      "category": "user"
+    },
+    {
+      "name": "LoginOutError",
+      "code": 10101,
+      "category": "user"
+    },
+    {
+      "name": "LoginRepeatError",
+      "code": 10102,
+      "category": "user"
+    },
+    {
+      "name": "FileNotFoundError",
+      "code": 10200,
+      "category": "message"
+    },
+    {
+      "name": "MsgDeCompressionError",
+      "code": 10201,
+      "category": "message"
+    },
+    {
+      "name": "MsgDecodeBinaryWsError",
+      "code": 10202,
+      "category": "message"
+    },
+    {
+      "name": "MsgBinaryTypeNotSupportError",
+      "code": 10203,
+      "category": "message"
+    },
+    {
+      "name": "MsgRepeatError",
+      "code": 10204,
+      "category": "message"
+    },
+    {
+      "name": "MsgContentTypeNotSupportError",
+      "code": 10205,
+      "category": "message"
+    },
+    {
+      "name": "MsgHasNoSeqError",
+      "code": 10206,
+      "category": "message"
+    },
+    {
+      "name": "MsgHasDeletedError",
+      "code": 10207,
+      "category": "message"
+    },
+    {
+      "name": "NotSupportOptError",
+      "code": 10301,
+      "category": "conversation"
+    },
+    {
+      "name": "NotSupportTypeError",
+      "code": 10302,
+      "category": "conversation"
+    },
+    {
+      "name": "UnreadCountError",
+      "code": 10303,
+      "category": "conversation"
+    },
+    {
+      "name": "GroupIDNotFoundError",
+      "code": 10400,
+      "category": "group"
+    },
+    {
+      "name": "GroupTypeErr",
+      "code": 10401,
+      "category": "group"
+    }
+  ],
+  "required_scenarios": [
+    "connection_status",
+    "login_sync_message",
+    "logout",
+    "message_arrival",
+    "file_upload_progress"
+  ]
+}
