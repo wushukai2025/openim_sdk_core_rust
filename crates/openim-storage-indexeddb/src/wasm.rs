@@ -1,7 +1,9 @@
+use openim_domain::{conversation::ConversationInfo, message::ChatMessage};
 use openim_errors::{OpenImError, Result};
 use openim_storage_core::{
     AppSdkVersion, VersionRecord, APP_SDK_VERSION_KEY, APP_SDK_VERSION_TABLE, VERSION_SYNC_TABLE,
 };
+use openim_types::Pagination;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
@@ -10,7 +12,12 @@ use web_sys::{
     IdbVersionChangeEvent,
 };
 
-const DB_VERSION: u32 = 1;
+use crate::{
+    conversation_key, message_key, CONVERSATION_STORE, MESSAGE_HISTORY_STORE, MESSAGE_STORE,
+    OWNER_CONVERSATION_STORE,
+};
+
+const DB_VERSION: u32 = 2;
 
 pub async fn migrate(db_name: &str) -> Result<()> {
     let db = open_database(db_name).await?;
@@ -36,6 +43,95 @@ pub async fn set_version_sync(db_name: &str, key: &str, record: &VersionRecord) 
 
 pub async fn delete_version_sync(db_name: &str, key: &str) -> Result<()> {
     delete_key(db_name, VERSION_SYNC_TABLE, key).await
+}
+
+pub async fn save_message(db_name: &str, message: ChatMessage) -> Result<()> {
+    let key = message_key(&message.conversation_id, &message.client_msg_id)?;
+    put_json(db_name, MESSAGE_STORE, &key, &message).await?;
+
+    let mut history =
+        get_json::<Vec<ChatMessage>>(db_name, MESSAGE_HISTORY_STORE, &message.conversation_id)
+            .await?
+            .unwrap_or_default();
+    upsert_message(&mut history, message.clone());
+    put_json(
+        db_name,
+        MESSAGE_HISTORY_STORE,
+        &message.conversation_id,
+        &history,
+    )
+    .await
+}
+
+pub async fn load_message(db_name: &str, key: &str) -> Result<Option<ChatMessage>> {
+    get_json(db_name, MESSAGE_STORE, key).await
+}
+
+pub async fn load_history(
+    db_name: &str,
+    conversation_id: &str,
+    pagination: Pagination,
+) -> Result<Vec<ChatMessage>> {
+    let mut history = get_json::<Vec<ChatMessage>>(db_name, MESSAGE_HISTORY_STORE, conversation_id)
+        .await?
+        .unwrap_or_default();
+    history.sort_by(message_desc_order);
+    Ok(paginate(history, pagination))
+}
+
+pub async fn save_conversation(db_name: &str, conversation: ConversationInfo) -> Result<()> {
+    let key = conversation_key(&conversation.owner_user_id, &conversation.conversation_id)?;
+    put_json(db_name, CONVERSATION_STORE, &key, &conversation).await?;
+
+    let mut conversations = get_json::<Vec<ConversationInfo>>(
+        db_name,
+        OWNER_CONVERSATION_STORE,
+        &conversation.owner_user_id,
+    )
+    .await?
+    .unwrap_or_default();
+    upsert_conversation(&mut conversations, conversation.clone());
+    put_json(
+        db_name,
+        OWNER_CONVERSATION_STORE,
+        &conversation.owner_user_id,
+        &conversations,
+    )
+    .await
+}
+
+pub async fn remove_conversation(
+    db_name: &str,
+    key: &str,
+    owner_user_id: &str,
+    conversation_id: &str,
+) -> Result<()> {
+    delete_key(db_name, CONVERSATION_STORE, key).await?;
+
+    let mut conversations =
+        get_json::<Vec<ConversationInfo>>(db_name, OWNER_CONVERSATION_STORE, owner_user_id)
+            .await?
+            .unwrap_or_default();
+    conversations.retain(|conversation| conversation.conversation_id != conversation_id);
+    put_json(
+        db_name,
+        OWNER_CONVERSATION_STORE,
+        owner_user_id,
+        &conversations,
+    )
+    .await
+}
+
+pub async fn load_conversations(
+    db_name: &str,
+    owner_user_id: &str,
+) -> Result<Vec<ConversationInfo>> {
+    let mut conversations =
+        get_json::<Vec<ConversationInfo>>(db_name, OWNER_CONVERSATION_STORE, owner_user_id)
+            .await?
+            .unwrap_or_default();
+    conversations.sort_by(conversation_order);
+    Ok(conversations)
 }
 
 pub async fn delete_database(db_name: &str) -> Result<()> {
@@ -102,6 +198,10 @@ async fn open_database(db_name: &str) -> Result<IdbDatabase> {
         let db = value.unchecked_into::<IdbDatabase>();
         let _ = ensure_store(&db, APP_SDK_VERSION_TABLE);
         let _ = ensure_store(&db, VERSION_SYNC_TABLE);
+        let _ = ensure_store(&db, MESSAGE_STORE);
+        let _ = ensure_store(&db, MESSAGE_HISTORY_STORE);
+        let _ = ensure_store(&db, CONVERSATION_STORE);
+        let _ = ensure_store(&db, OWNER_CONVERSATION_STORE);
     }) as Box<dyn FnMut(IdbVersionChangeEvent)>);
 
     request.set_onupgradeneeded(Some(on_upgrade.as_ref().unchecked_ref()));
@@ -180,11 +280,70 @@ fn json_error(err: serde_json::Error) -> OpenImError {
     OpenImError::sdk_internal(format!("indexeddb json error: {err}"))
 }
 
+fn upsert_message(messages: &mut Vec<ChatMessage>, message: ChatMessage) {
+    if let Some(existing) = messages
+        .iter_mut()
+        .find(|item| item.client_msg_id == message.client_msg_id)
+    {
+        *existing = message;
+    } else {
+        messages.push(message);
+    }
+}
+
+fn upsert_conversation(conversations: &mut Vec<ConversationInfo>, conversation: ConversationInfo) {
+    if let Some(existing) = conversations
+        .iter_mut()
+        .find(|item| item.conversation_id == conversation.conversation_id)
+    {
+        *existing = conversation;
+    } else {
+        conversations.push(conversation);
+    }
+}
+
+fn message_desc_order(left: &ChatMessage, right: &ChatMessage) -> std::cmp::Ordering {
+    right
+        .seq
+        .cmp(&left.seq)
+        .then_with(|| right.send_time.cmp(&left.send_time))
+        .then_with(|| right.client_msg_id.cmp(&left.client_msg_id))
+}
+
+fn conversation_order(left: &ConversationInfo, right: &ConversationInfo) -> std::cmp::Ordering {
+    right
+        .is_pinned
+        .cmp(&left.is_pinned)
+        .then_with(|| conversation_time(right).cmp(&conversation_time(left)))
+        .then_with(|| left.conversation_id.cmp(&right.conversation_id))
+}
+
+fn conversation_time(conversation: &ConversationInfo) -> i64 {
+    conversation
+        .latest_msg_send_time
+        .max(conversation.draft_text_time)
+}
+
+fn paginate<T>(items: Vec<T>, pagination: Pagination) -> Vec<T> {
+    let pagination = pagination.normalized();
+    let start = (pagination.page_number as usize).saturating_mul(pagination.show_number as usize);
+    items
+        .into_iter()
+        .skip(start)
+        .take(pagination.show_number as usize)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
+    use openim_domain::{
+        conversation::ConversationInfo,
+        message::{ChatMessage, MessageContent, MessageSnapshot},
+    };
     use openim_storage_core::{
         version_sync_key, AsyncAppVersionStore, AsyncStorageMigrator, AsyncVersionStore,
     };
+    use openim_types::{Pagination, SessionType};
     use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
 
     use crate::{delete_database, IndexedDbStorage};
@@ -237,5 +396,75 @@ mod tests {
             version_sync_key("table", "entity").unwrap(),
             r#"["table","entity"]"#
         );
+    }
+
+    #[wasm_bindgen_test]
+    async fn indexeddb_round_trips_message_and_conversation_records() {
+        let db_name = "OpenIM_v3_wasm_message_conversation_test";
+        let _ = delete_database(db_name).await;
+        let storage = IndexedDbStorage::with_db_name(db_name).unwrap();
+        storage.migrate().await.unwrap();
+
+        let first = message("client-1", "server-1", 1, 100);
+        let second = message("client-2", "server-2", 2, 200);
+        storage.save_message(first.clone()).await.unwrap();
+        storage.save_message(second.clone()).await.unwrap();
+
+        assert_eq!(
+            storage
+                .load_message(&first.conversation_id, &first.client_msg_id)
+                .await
+                .unwrap(),
+            Some(first.clone())
+        );
+        assert_eq!(
+            storage
+                .load_history(
+                    &first.conversation_id,
+                    Pagination {
+                        page_number: 0,
+                        show_number: 1,
+                    },
+                )
+                .await
+                .unwrap(),
+            vec![second.clone()]
+        );
+
+        let mut conversation = ConversationInfo::from_message("u1", &second).unwrap();
+        conversation.latest_message = Some(MessageSnapshot::from(&second));
+        conversation.latest_msg_send_time = second.send_time;
+        conversation.unread_count = 1;
+        storage
+            .save_conversation(conversation.clone())
+            .await
+            .unwrap();
+        assert_eq!(
+            storage.load_conversations("u1").await.unwrap(),
+            vec![conversation.clone()]
+        );
+
+        storage
+            .remove_conversation("u1", &conversation.conversation_id)
+            .await
+            .unwrap();
+        assert!(storage.load_conversations("u1").await.unwrap().is_empty());
+        delete_database(db_name).await.unwrap();
+    }
+
+    fn message(client_msg_id: &str, server_msg_id: &str, seq: i64, send_time: i64) -> ChatMessage {
+        ChatMessage::incoming(
+            client_msg_id,
+            server_msg_id,
+            "u2",
+            "u1",
+            SessionType::Single,
+            MessageContent::Text {
+                content: format!("hello-{seq}"),
+            },
+            seq,
+            send_time,
+        )
+        .unwrap()
     }
 }

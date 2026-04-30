@@ -8,7 +8,7 @@ use openim_types::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{summarize_action, DomainSyncSummary};
+use crate::{file::FileDigest, summarize_action, DomainSyncSummary};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -39,6 +39,40 @@ pub enum MessageContent {
 }
 
 impl MessageContent {
+    pub fn picture_from_upload(
+        file: &FileDigest,
+        source_url: impl Into<String>,
+        snapshot_url: impl Into<String>,
+        width: i32,
+        height: i32,
+    ) -> Result<Self> {
+        let source_url = source_url.into();
+        ensure_not_empty(&source_url, "source_url")?;
+        let content = Self::Picture(PictureElem {
+            source_url,
+            snapshot_url: snapshot_url.into(),
+            width,
+            height,
+            size: file_size_i64(file.file_size)?,
+            image_type: file.content_type.clone(),
+        });
+        content.validate()?;
+        Ok(content)
+    }
+
+    pub fn file_from_upload(file: &FileDigest, source_url: impl Into<String>) -> Result<Self> {
+        let source_url = source_url.into();
+        ensure_not_empty(&source_url, "source_url")?;
+        let content = Self::File(FileElem {
+            source_url,
+            file_name: file.file_name.clone(),
+            file_size: file_size_i64(file.file_size)?,
+            file_type: file.content_type.clone(),
+        });
+        content.validate()?;
+        Ok(content)
+    }
+
     pub const fn content_type(&self) -> MessageContentType {
         match self {
             Self::Text { .. } => MessageContentType::Text,
@@ -550,6 +584,10 @@ fn paginate<T>(items: Vec<T>, pagination: Pagination) -> Vec<T> {
         .collect()
 }
 
+fn file_size_i64(file_size: u64) -> Result<i64> {
+    i64::try_from(file_size).map_err(|_| OpenImError::args("file_size exceeds i64 range"))
+}
+
 fn ensure_not_empty(value: &str, field: &str) -> Result<()> {
     if value.is_empty() {
         Err(OpenImError::args(format!("{field} is empty")))
@@ -561,6 +599,35 @@ fn ensure_not_empty(value: &str, field: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn upload_results_build_picture_and_file_message_contents() {
+        let file = FileDigest {
+            file_name: "avatar.png".to_string(),
+            file_size: 42,
+            content_type: "image/png".to_string(),
+            sha256: "sha".to_string(),
+        };
+
+        let picture = MessageContent::picture_from_upload(
+            &file,
+            "https://upload.test/avatar.png",
+            "https://upload.test/avatar-thumb.png",
+            100,
+            80,
+        )
+        .unwrap();
+        assert_eq!(picture.content_type(), MessageContentType::Picture);
+        assert_eq!(picture.summary(), "https://upload.test/avatar.png");
+
+        let file_content =
+            MessageContent::file_from_upload(&file, "https://upload.test/avatar.png").unwrap();
+        assert_eq!(file_content.content_type(), MessageContentType::File);
+        assert_eq!(file_content.summary(), "avatar.png");
+
+        assert!(MessageContent::picture_from_upload(&file, "", "", 0, 0).is_err());
+        assert!(MessageContent::file_from_upload(&file, "").is_err());
+    }
 
     #[test]
     fn sends_text_picture_and_file_messages() {

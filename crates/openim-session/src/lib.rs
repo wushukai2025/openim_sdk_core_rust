@@ -2,8 +2,11 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use openim_domain::{
-    conversation::ConversationService, group::GroupService, message::MessageService,
-    relation::RelationService, user::UserService,
+    conversation::{ConversationInfo, ConversationService},
+    group::GroupService,
+    message::{ChatMessage, MessageService},
+    relation::RelationService,
+    user::UserService,
 };
 use openim_errors::{OpenImError, Result};
 use openim_storage_core::{openim_db_file, openim_indexeddb_name};
@@ -110,13 +113,31 @@ pub enum SessionState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SessionEvent {
     Initialized,
-    LoggedIn { user_id: UserId },
-    LoggedOut { user_id: UserId },
+    LoggedIn {
+        user_id: UserId,
+    },
+    LoggedOut {
+        user_id: UserId,
+    },
     Uninitialized,
-    ListenerRegistered { listener_id: ListenerId },
-    ListenerUnregistered { listener_id: ListenerId },
-    TaskStarted { name: String },
-    TaskStopped { name: String },
+    ListenerRegistered {
+        listener_id: ListenerId,
+    },
+    ListenerUnregistered {
+        listener_id: ListenerId,
+    },
+    TaskStarted {
+        name: String,
+    },
+    TaskStopped {
+        name: String,
+    },
+    NewMessages {
+        messages: Vec<ChatMessage>,
+    },
+    ConversationChanged {
+        conversations: Vec<ConversationInfo>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -404,6 +425,25 @@ impl OpenImSession {
         Ok(())
     }
 
+    pub fn dispatch_new_messages(&self, messages: Vec<ChatMessage>) -> Result<()> {
+        self.ensure_logged_in()?;
+        if !messages.is_empty() {
+            self.emit(SessionEvent::NewMessages { messages });
+        }
+        Ok(())
+    }
+
+    pub fn dispatch_conversation_changed(
+        &self,
+        conversations: Vec<ConversationInfo>,
+    ) -> Result<()> {
+        self.ensure_logged_in()?;
+        if !conversations.is_empty() {
+            self.emit(SessionEvent::ConversationChanged { conversations });
+        }
+        Ok(())
+    }
+
     pub fn state(&self) -> SessionState {
         self.state
     }
@@ -421,9 +461,7 @@ impl OpenImSession {
     }
 
     pub fn domains_mut(&mut self) -> Result<&mut DomainServices> {
-        if self.state != SessionState::LoggedIn {
-            return Err(OpenImError::args("session is not logged in"));
-        }
+        self.ensure_logged_in()?;
         Ok(&mut self.domains)
     }
 
@@ -448,6 +486,13 @@ impl OpenImSession {
     fn emit(&self, event: SessionEvent) {
         self.listeners.emit(&event);
     }
+
+    fn ensure_logged_in(&self) -> Result<()> {
+        if self.state != SessionState::LoggedIn {
+            return Err(OpenImError::args("session is not logged in"));
+        }
+        Ok(())
+    }
 }
 
 fn ensure_not_empty(value: &str, field: &str) -> Result<()> {
@@ -462,7 +507,12 @@ fn ensure_not_empty(value: &str, field: &str) -> Result<()> {
 mod tests {
     use std::sync::{Arc, Mutex};
 
-    use openim_domain::user::UserProfile;
+    use openim_domain::{
+        conversation::ConversationInfo,
+        message::{ChatMessage, MessageContent, MessageSnapshot},
+        user::UserProfile,
+    };
+    use openim_types::SessionType;
 
     use super::*;
 
@@ -476,6 +526,22 @@ mod tests {
 
     fn credentials() -> LoginCredentials {
         LoginCredentials::new("u1", "token")
+    }
+
+    fn inbound_message() -> ChatMessage {
+        ChatMessage::incoming(
+            "client-1",
+            "server-1",
+            "u2",
+            "u1",
+            SessionType::Single,
+            MessageContent::Text {
+                content: "hello".to_string(),
+            },
+            1,
+            100,
+        )
+        .unwrap()
     }
 
     #[test]
@@ -602,6 +668,48 @@ mod tests {
 
         assert_eq!(*first.lock().unwrap(), 2);
         assert_eq!(*second.lock().unwrap(), 3);
+    }
+
+    #[test]
+    fn dispatches_message_and_conversation_events_only_after_login() {
+        let events = Arc::new(Mutex::new(Vec::<SessionEvent>::new()));
+        let captured = events.clone();
+        let mut session = OpenImSession::new(config()).unwrap();
+        session.register_listener(move |event| {
+            captured.lock().unwrap().push(event.clone());
+        });
+
+        assert!(session.dispatch_new_messages(Vec::new()).is_err());
+
+        session.init().unwrap();
+        session.login(credentials()).unwrap();
+        let message = inbound_message();
+        let mut conversation = ConversationInfo::from_message("u1", &message).unwrap();
+        conversation.latest_message = Some(MessageSnapshot::from(&message));
+        conversation.latest_msg_send_time = message.send_time;
+
+        session
+            .dispatch_new_messages(vec![message.clone()])
+            .unwrap();
+        session
+            .dispatch_conversation_changed(vec![conversation.clone()])
+            .unwrap();
+        session.dispatch_new_messages(Vec::new()).unwrap();
+
+        let events = events.lock().unwrap();
+        assert!(events.contains(&SessionEvent::NewMessages {
+            messages: vec![message],
+        }));
+        assert!(events.contains(&SessionEvent::ConversationChanged {
+            conversations: vec![conversation],
+        }));
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, SessionEvent::NewMessages { .. }))
+                .count(),
+            1
+        );
     }
 
     #[test]

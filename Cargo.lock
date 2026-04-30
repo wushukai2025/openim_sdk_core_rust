@@ -829,8 +829,10 @@ name = "openim-storage-indexeddb"
 version = "0.1.0"
 dependencies = [
  "js-sys",
+ "openim-domain",
  "openim-errors",
  "openim-storage-core",
+ "openim-types",
  "serde",
  "serde_json",
  "wasm-bindgen",
