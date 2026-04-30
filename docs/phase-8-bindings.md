@@ -15,7 +15,7 @@ a:has(code[data-code-ref]) {
 
 ## 结论
 
-Phase 8 已先落地可本地编译的绑定层骨架：原生 C ABI crate、wasm-bindgen crate、句柄模型、基础生命周期 API、通用 session event listener 桥接、C header、desktop C、iOS Swift、Android Kotlin/JNI 和 Web TypeScript 生命周期示例源码已进入 workspace，并通过本地单元测试覆盖示例 API 漂移。当前已把可本地证明的 Session event 到 Go 细分 listener 映射种子扩到 4 条，并补齐 generic listener 对 newConversations 与 totalUnreadCountChanged 的事件名和 payload key；本轮继续把 desktop C 示例从“只有源码”推进到“Darwin 本机可实际 clang 链接 openim-ffi staticlib 并运行生命周期 smoke”，并进一步把 native C ABI 创建路径接到 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase8-ffi-native-adapter">NativeSessionResourceAdapter</code>，支持通过 openim_session_create_with_data_dir 和 OPENIM_DATA_DIR 打开 SQLite storage 资源。仍不冒充平台交付：真实平台工程构建、真实平台打包产物、Go SDK 细分 listener 全量映射和真实服务端端到端验证仍属于后续 Gate。
+Phase 8 已先落地可本地编译的绑定层骨架：原生 C ABI crate、wasm-bindgen crate、句柄模型、基础生命周期 API、通用 session event listener 桥接、C header、desktop C、iOS Swift、Android Kotlin/JNI 和 Web TypeScript 生命周期示例源码已进入 workspace，并通过本地单元测试覆盖示例 API 漂移。当前已把可本地证明的 Session event 到 Go 细分 listener 映射种子扩到 4 条，并进一步补齐 generic session event 到 Go listener 调用列表的导出辅助：native C ABI 可直接把 event/payload 映射成 JSON 调用列表，wasm 侧也补了同名 helper 供 Web 包装层复用；本轮继续把 desktop C 示例从“只有源码”推进到“Darwin 本机可实际 clang 链接 openim-ffi staticlib 并运行生命周期 smoke”，并进一步把 native C ABI 创建路径接到 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase8-ffi-native-adapter">NativeSessionResourceAdapter</code>，支持通过 openim_session_create_with_data_dir 和 OPENIM_DATA_DIR 打开 SQLite storage 资源。仍不冒充平台交付：真实平台工程构建、真实平台打包产物、Go SDK 细分 listener 全量映射和真实服务端端到端验证仍属于后续 Gate。
 <!-- code-ref: phase8-ffi-native-adapter -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-ffi/src/lib.rs#L75 -->
 
 ## Rust 落地点
@@ -47,13 +47,21 @@ Phase 8 已先落地可本地编译的绑定层骨架：原生 C ABI crate、was
 
 - 原生通用 session event 回调通过 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase8-ffi-event-callback">OpenImFfiSessionEventCallback</code>、<code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase8-ffi-register-listener">openim_session_register_listener</code> 和 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase8-ffi-unregister-listener">openim_session_unregister_listener</code> 暴露，事件名和 payload JSON 在回调调用期间有效。
 <!-- code-ref: phase8-ffi-event-callback -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-ffi/src/lib.rs#L23 -->
-<!-- code-ref: phase8-ffi-register-listener -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-ffi/src/lib.rs#L148 -->
-<!-- code-ref: phase8-ffi-unregister-listener -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-ffi/src/lib.rs#L179 -->
+<!-- code-ref: phase8-ffi-register-listener -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-ffi/src/lib.rs#L176 -->
+<!-- code-ref: phase8-ffi-unregister-listener -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-ffi/src/lib.rs#L207 -->
 
 - 通用 listener 的事件名和 payload JSON 由 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase8-ffi-event-name">session_event_name</code> 与 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase8-ffi-event-payload">session_event_payload_json</code> 固定，当前已补齐 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase8-ffi-event-derived-test">session_event_name_and_payload_cover_conversation_derived_events</code>，锁定 newConversations 和 totalUnreadCountChanged 的导出名字与 JSON key。
-<!-- code-ref: phase8-ffi-event-name -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-ffi/src/lib.rs#L253 -->
-<!-- code-ref: phase8-ffi-event-payload -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-ffi/src/lib.rs#L272 -->
-<!-- code-ref: phase8-ffi-event-derived-test -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-ffi/src/lib.rs#L523 -->
+<!-- code-ref: phase8-ffi-event-name -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-ffi/src/lib.rs#L281 -->
+<!-- code-ref: phase8-ffi-event-payload -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-ffi/src/lib.rs#L300 -->
+<!-- code-ref: phase8-ffi-event-derived-test -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-ffi/src/lib.rs#L555 -->
+
+- 绑定层公共映射语义已下沉到 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase8-session-go-dispatch">map_session_event_payload_to_go_listener_dispatches</code>：当前会把 generic session event/payload 映射成 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase8-session-go-dispatch-record">GoListenerDispatch</code> 列表，并固定 NewMessages 的逐条 fan-out、会话列表 JSON 透传以及总未读数文本。
+<!-- code-ref: phase8-session-go-dispatch -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-session/src/lib.rs#L174 -->
+<!-- code-ref: phase8-session-go-dispatch-record -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-session/src/lib.rs#L168 -->
+
+- native C ABI 已新增 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase8-ffi-map-event">openim_map_session_event_to_go_listener_json</code> 和 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase8-ffi-free-string">openim_ffi_string_free</code>，供平台包装层把 generic event/payload 直接转换成 Go 细分 listener 调用列表 JSON，并在 native 侧回收返回字符串。
+<!-- code-ref: phase8-ffi-map-event -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-ffi/src/lib.rs#L148 -->
+<!-- code-ref: phase8-ffi-free-string -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-ffi/src/lib.rs#L169 -->
 
 - wasm 导出 crate 通过 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase8-wasm-crate-type">crate-type</code> 产出 cdylib 和 rlib，并复用 workspace 的 wasm-bindgen 依赖。
 <!-- code-ref: phase8-wasm-crate-type -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-wasm/Cargo.toml#L8 -->
@@ -69,13 +77,21 @@ Phase 8 已先落地可本地编译的绑定层骨架：原生 C ABI crate、was
 <!-- code-ref: phase8-wasm-add-listener -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-wasm/src/lib.rs#L106 -->
 <!-- code-ref: phase8-wasm-remove-listener -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-wasm/src/lib.rs#L119 -->
 
+- wasm 侧已新增 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase8-wasm-map-event">mapSessionEventToGoListeners</code>，Web 包装层可以直接把 generic event/payload 映射成 Go 细分 listener 调用列表；当前示例已在 listener 回调里消费该 helper。
+<!-- code-ref: phase8-wasm-map-event -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-wasm/src/lib.rs#L140 -->
+
 - 本地测试已固定 C ABI 和 wasm 基础生命周期：<code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase8-ffi-lifecycle-test">c_abi_session_lifecycle_uses_opaque_handle</code> 覆盖 opaque pointer 状态流转，<code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase8-wasm-lifecycle-test">wasm_session_lifecycle_exports_basic_state</code> 覆盖 wasm 包装状态流转。
 <!-- code-ref: phase8-ffi-lifecycle-test -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-ffi/src/lib.rs#L363 -->
 <!-- code-ref: phase8-wasm-lifecycle-test -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-wasm/src/lib.rs#L176 -->
 
 - 本地 C ABI listener 测试 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase8-ffi-listener-test">c_abi_listener_dispatches_lifecycle_events</code> 固定 listenerRegistered、initialized、task/resource 事件和 loggedIn/loggedOut 顺序；<code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase8-ffi-storage-test">c_abi_create_with_data_dir_opens_native_storage_resource</code> 会额外验证 data_dir 打开 SQLite storage。
-<!-- code-ref: phase8-ffi-listener-test -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-ffi/src/lib.rs#L455 -->
-<!-- code-ref: phase8-ffi-storage-test -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-ffi/src/lib.rs#L555 -->
+<!-- code-ref: phase8-ffi-listener-test -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-ffi/src/lib.rs#L487 -->
+<!-- code-ref: phase8-ffi-storage-test -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-ffi/src/lib.rs#L635 -->
+
+- 新增映射 helper 的本地测试由 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase8-ffi-map-test">c_abi_maps_generic_session_event_to_go_listener_dispatches</code>、<code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase8-wasm-map-test">wasm_maps_generic_session_event_to_go_listener_dispatches</code> 和 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase8-session-map-test">session_event_payload_maps_to_go_listener_dispatches</code> 固定，分别覆盖 native 导出、wasm 导出和会话层公共映射语义。
+<!-- code-ref: phase8-ffi-map-test -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-ffi/src/lib.rs#L590 -->
+<!-- code-ref: phase8-wasm-map-test -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-wasm/src/lib.rs#L216 -->
+<!-- code-ref: phase8-session-map-test -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-session/src/lib.rs#L1193 -->
 
 - 已实现 Session event 到 Go 细分 listener 的映射种子由 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase8-session-listener-mapping">session_event_listener_mappings</code> 固定，当前覆盖 NewMessages -> OnAdvancedMsgListener.OnRecvNewMessage、NewConversations -> OnConversationListener.OnNewConversation、ConversationChanged -> OnConversationListener.OnConversationChanged，以及 TotalUnreadCountChanged -> OnConversationListener.OnTotalUnreadMessageCountChanged；<code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase8-session-listener-mapping-test">session_event_listener_mapping_covers_current_session_events</code> 会对 fixture 校验，源码存在时还会对 Go callback_client.go 自动抽取结果校验。
 <!-- code-ref: phase8-session-listener-mapping -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-compat-tests/src/lib.rs#L435 -->
@@ -94,15 +110,15 @@ Phase 8 已先落地可本地编译的绑定层骨架：原生 C ABI crate、was
 <!-- code-ref: phase8-android-kotlin-example -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/examples/android-kotlin/OpenIMLifecycleExample.kt#L3 -->
 <!-- code-ref: phase8-android-jni-example -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/examples/android-kotlin/openim_jni_lifecycle.cc#L1 -->
 
-- Web 示例源码 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase8-web-example">openim_lifecycle.ts</code> 使用 wasm-bindgen 生成的 OpenImWasmSession，覆盖 addListener、init、login、logout、uninit、removeListener 和 stateCode。
+- Web 示例源码 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase8-web-example">openim_lifecycle.ts</code> 使用 wasm-bindgen 生成的 OpenImWasmSession，覆盖 addListener、init、login、logout、uninit、removeListener、stateCode 以及 mapSessionEventToGoListeners。
 <!-- code-ref: phase8-web-example -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/examples/web/openim_lifecycle.ts#L1 -->
 
 - 示例 API 漂移检查已进入单元测试：<code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase8-native-example-test">native_header_and_examples_cover_lifecycle_exports</code> 校验 C header、desktop、iOS 和 Android 示例，<code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase8-web-example-test">web_example_uses_wasm_lifecycle_exports</code> 校验 Web 示例。
-<!-- code-ref: phase8-native-example-test -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-ffi/src/lib.rs#L590 -->
-<!-- code-ref: phase8-web-example-test -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-wasm/src/lib.rs#L203 -->
+<!-- code-ref: phase8-native-example-test -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-ffi/src/lib.rs#L663 -->
+<!-- code-ref: phase8-web-example-test -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-wasm/src/lib.rs#L230 -->
 
 - Darwin 本地新增 desktop C 示例实际构建运行 smoke：测试会调用 cargo build -p openim-ffi 生成最新 staticlib，再用 clang 把 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase8-desktop-example-smoke">openim_desktop_lifecycle.c</code> 链接到 openim-ffi staticlib，并运行 listener 注册、Init、Login、Logout、UnInit 和 native resource 事件最小回归。
-<!-- code-ref: phase8-desktop-example-smoke -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-ffi/src/lib.rs#L634 -->
+<!-- code-ref: phase8-desktop-example-smoke -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-ffi/src/lib.rs#L708 -->
 
 ## 验证命令
 
@@ -156,6 +172,6 @@ cargo test --workspace
 
 ## Gate 状态
 
-当前已完成：C ABI crate 骨架、wasm-bindgen crate 骨架、opaque 句柄模型、基础生命周期 API、状态码读取、last error 读取、native 和 wasm 回调线程策略常量、通用 session event listener 注册/注销、generic listener 对 newConversations/totalUnreadCountChanged 的事件名与 payload key 固定、native C ABI 通过 NativeSessionResourceAdapter 进入 storage/transport/sync 资源路径、openim_session_create_with_data_dir 和 OPENIM_DATA_DIR 入口、C header、desktop C 示例源码、Darwin 本地 staticlib 构建链接运行 smoke、iOS Swift 示例源码、Android Kotlin/JNI 生命周期与 listener 示例源码、Web TypeScript 示例源码、已实现 4 条 Session event 到 Go 细分 listener 的映射种子、本地 C ABI 单元测试、本地 wasm 单元测试、listener 生命周期派发测试、示例 API 漂移检查、wasm32 编译检查和 workspace 回归。
+当前已完成：C ABI crate 骨架、wasm-bindgen crate 骨架、opaque 句柄模型、基础生命周期 API、状态码读取、last error 读取、native 和 wasm 回调线程策略常量、通用 session event listener 注册/注销、generic listener 对 newConversations/totalUnreadCountChanged 的事件名与 payload key 固定、generic event 到 Go listener 调用列表的 session/FFI/wasm 三层 helper、native C ABI 通过 NativeSessionResourceAdapter 进入 storage/transport/sync 资源路径、openim_session_create_with_data_dir 和 OPENIM_DATA_DIR 入口、C header、desktop C 示例源码、Darwin 本地 staticlib 构建链接运行 smoke、iOS Swift 示例源码、Android Kotlin/JNI 生命周期与 listener 示例源码、Web TypeScript 示例源码、已实现 4 条 Session event 到 Go 细分 listener 的映射种子、本地 C ABI 单元测试、本地 wasm 单元测试、listener 生命周期派发测试、示例 API 漂移检查、wasm32 编译检查和 workspace 回归。
 
 当前未完成：iOS、Android 和 Web 示例工程的真实平台构建；Swift/Kotlin/TypeScript 包装产物发布；Go SDK 细分 listener 全量映射和平台包装层派发；真实平台线程切换；macOS desktop C 示例在真实服务端环境下的 Init、Login、Logout、UnInit 端到端验证。这些能力继续留在 R2-09 平台 Gate 和后续真实集成 Gate。
