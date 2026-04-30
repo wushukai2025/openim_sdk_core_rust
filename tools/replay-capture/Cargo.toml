@@ -10,4 +10,6 @@ publish = false
 anyhow.workspace = true
 clap.workspace = true
 openim-compat-tests = { path = "../../crates/openim-compat-tests" }
+openim-session = { path = "../../crates/openim-session" }
+openim-types = { path = "../../crates/openim-types" }
 serde_json.workspace = true

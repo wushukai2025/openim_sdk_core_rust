@@ -9,8 +9,12 @@ use std::{
 use anyhow::{anyhow, Context, Result};
 use clap::{Args, Parser, Subcommand};
 use openim_compat_tests::{
-    load_phase0_contract_fixture, load_replay_events, validate_replay_transcript, ReplayEvent,
+    compare_replay_scenario, load_phase0_contract_fixture, load_replay_events,
+    validate_replay_transcript, ReplayEvent,
 };
+use openim_session::{LoginCredentials, OpenImSession, SessionConfig, SessionEvent};
+use openim_types::Platform;
+use serde_json::json;
 
 #[derive(Debug, Parser)]
 #[command(version, about = "OpenIM Phase 0 replay transcript capture helper")]
@@ -21,9 +25,19 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    Compare(CompareArgs),
     CaptureCommand(CaptureCommandArgs),
     CaptureJsonl(CaptureJsonlArgs),
+    CaptureRustSession(CaptureRustSessionArgs),
     Validate(ValidateArgs),
+}
+
+#[derive(Debug, Args)]
+struct CompareArgs {
+    #[arg(long, env = "OPENIM_GO_REPLAY_EVENTS")]
+    go_events: PathBuf,
+    #[arg(long, env = "OPENIM_RUST_REPLAY_EVENTS")]
+    rust_events: PathBuf,
 }
 
 #[derive(Debug, Args)]
@@ -43,6 +57,24 @@ struct CaptureJsonlArgs {
 }
 
 #[derive(Debug, Args)]
+struct CaptureRustSessionArgs {
+    #[arg(long)]
+    output: Option<PathBuf>,
+    #[arg(long, default_value = "rust_session_lifecycle")]
+    scenario: String,
+    #[arg(long, default_value = "https://api.openim.test")]
+    api_addr: String,
+    #[arg(long, default_value = "wss://ws.openim.test")]
+    ws_addr: String,
+    #[arg(long, default_value = "u1")]
+    user_id: String,
+    #[arg(long, default_value = "token")]
+    token: String,
+    #[arg(long, default_value_t = Platform::Web.as_i32())]
+    platform_id: i32,
+}
+
+#[derive(Debug, Args)]
 struct ValidateArgs {
     #[arg(long, env = "OPENIM_REPLAY_EVENTS")]
     events: PathBuf,
@@ -52,10 +84,45 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
+        Command::Compare(args) => compare_transcripts(args),
         Command::CaptureCommand(args) => capture_command(args),
         Command::CaptureJsonl(args) => capture_jsonl(args),
+        Command::CaptureRustSession(args) => capture_rust_session(args),
         Command::Validate(args) => validate_transcript(args),
     }
+}
+
+fn compare_transcripts(args: CompareArgs) -> Result<()> {
+    let fixture = load_phase0_contract_fixture();
+    let go_events = load_replay_events(&args.go_events).with_context(|| {
+        format!(
+            "load Go replay transcript failed: {}",
+            args.go_events.display()
+        )
+    })?;
+    let rust_events = load_replay_events(&args.rust_events).with_context(|| {
+        format!(
+            "load Rust replay transcript failed: {}",
+            args.rust_events.display()
+        )
+    })?;
+
+    validate_replay_transcript(&fixture, &go_events)
+        .map_err(|err| anyhow!("invalid Go replay transcript: {err}"))?;
+    validate_replay_transcript(&fixture, &rust_events)
+        .map_err(|err| anyhow!("invalid Rust replay transcript: {err}"))?;
+    for scenario in &fixture.required_scenarios {
+        compare_replay_scenario(scenario, &go_events, &rust_events)
+            .map_err(|err| anyhow!("replay transcript mismatch: {err}"))?;
+    }
+
+    println!(
+        "matching replay transcripts scenarios={} go_events={} rust_events={}",
+        fixture.required_scenarios.len(),
+        go_events.len(),
+        rust_events.len()
+    );
+    Ok(())
 }
 
 fn capture_command(args: CaptureCommandArgs) -> Result<()> {
@@ -87,6 +154,12 @@ fn capture_jsonl(args: CaptureJsonlArgs) -> Result<()> {
     let output = serde_json::to_string_pretty(&events)? + "\n";
     write_output(args.output.as_deref(), &output)?;
     Ok(())
+}
+
+fn capture_rust_session(args: CaptureRustSessionArgs) -> Result<()> {
+    let events = capture_rust_session_events(&args)?;
+    let transcript = serde_json::to_string_pretty(&events)? + "\n";
+    write_output(args.output.as_deref(), &transcript)
 }
 
 fn validate_transcript(args: ValidateArgs) -> Result<()> {
@@ -158,6 +231,65 @@ fn scenario_count(events: &[ReplayEvent]) -> usize {
         .len()
 }
 
+fn capture_rust_session_events(args: &CaptureRustSessionArgs) -> Result<Vec<ReplayEvent>> {
+    let platform = Platform::from_i32(args.platform_id)
+        .ok_or_else(|| anyhow!("invalid platform_id: {}", args.platform_id))?;
+    let config = SessionConfig::new(platform, args.api_addr.clone(), args.ws_addr.clone());
+    let credentials = LoginCredentials::new(args.user_id.clone(), args.token.clone());
+    let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::<ReplayEvent>::new()));
+    let captured = events.clone();
+    let scenario = args.scenario.clone();
+    let mut session = OpenImSession::new(config)?;
+
+    session.register_listener(move |event| {
+        captured
+            .lock()
+            .expect("capture mutex")
+            .push(session_event_to_replay_event(&scenario, event));
+    });
+    session.init()?;
+    session.login(credentials)?;
+    session.logout()?;
+    session.uninit()?;
+
+    let events = events.lock().expect("capture mutex").clone();
+    if events.is_empty() {
+        return Err(anyhow!("rust session emitted no events"));
+    }
+    Ok(events)
+}
+
+fn session_event_to_replay_event(scenario: &str, event: &SessionEvent) -> ReplayEvent {
+    let (method, payload) = match event {
+        SessionEvent::Initialized => ("Initialized", serde_json::Value::Null),
+        SessionEvent::LoggedIn { user_id } => ("LoggedIn", json!({ "userID": user_id })),
+        SessionEvent::LoggedOut { user_id } => ("LoggedOut", json!({ "userID": user_id })),
+        SessionEvent::Uninitialized => ("Uninitialized", serde_json::Value::Null),
+        SessionEvent::ListenerRegistered { listener_id } => {
+            ("ListenerRegistered", json!({ "listenerID": listener_id }))
+        }
+        SessionEvent::ListenerUnregistered { listener_id } => {
+            ("ListenerUnregistered", json!({ "listenerID": listener_id }))
+        }
+        SessionEvent::TaskStarted { name } => ("TaskStarted", json!({ "name": name })),
+        SessionEvent::TaskStopped { name } => ("TaskStopped", json!({ "name": name })),
+        SessionEvent::NewMessages { messages } => {
+            ("NewMessages", json!({ "count": messages.len() }))
+        }
+        SessionEvent::ConversationChanged { conversations } => (
+            "ConversationChanged",
+            json!({ "count": conversations.len() }),
+        ),
+    };
+
+    ReplayEvent {
+        scenario: scenario.to_string(),
+        listener: "RustSession".to_string(),
+        method: method.to_string(),
+        payload,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -197,5 +329,80 @@ mod tests {
         let err = parse_jsonl_events("\n\n").expect_err("empty jsonl should fail");
 
         assert!(err.to_string().contains("contains no events"));
+    }
+
+    #[test]
+    fn captures_rust_session_lifecycle_events() {
+        let args = CaptureRustSessionArgs {
+            output: None,
+            scenario: "rust_session_lifecycle".to_string(),
+            api_addr: "https://api.openim.test".to_string(),
+            ws_addr: "wss://ws.openim.test".to_string(),
+            user_id: "u1".to_string(),
+            token: "token".to_string(),
+            platform_id: Platform::Web.as_i32(),
+        };
+
+        let events = capture_rust_session_events(&args).expect("capture rust session");
+        let methods = events
+            .iter()
+            .map(|event| event.method.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(methods.contains(&"Initialized"));
+        assert!(methods.contains(&"LoggedIn"));
+        assert!(methods.contains(&"TaskStarted"));
+        assert!(methods.contains(&"TaskStopped"));
+        assert!(methods.contains(&"LoggedOut"));
+        assert!(methods.contains(&"Uninitialized"));
+        assert!(events
+            .iter()
+            .all(|event| event.scenario == "rust_session_lifecycle"
+                && event.listener == "RustSession"));
+    }
+
+    #[test]
+    fn compares_matching_phase0_transcript_files() {
+        let fixture = load_phase0_contract_fixture();
+        let events = minimal_required_events(&fixture);
+        let go_path = temp_path("go-events");
+        let rust_path = temp_path("rust-events");
+        fs::write(&go_path, serde_json::to_string(&events).unwrap()).unwrap();
+        fs::write(&rust_path, serde_json::to_string(&events).unwrap()).unwrap();
+
+        compare_transcripts(CompareArgs {
+            go_events: go_path.clone(),
+            rust_events: rust_path.clone(),
+        })
+        .expect("compare matching transcripts");
+
+        let _ = fs::remove_file(go_path);
+        let _ = fs::remove_file(rust_path);
+    }
+
+    fn minimal_required_events(fixture: &openim_compat_tests::ContractFixture) -> Vec<ReplayEvent> {
+        let mut events = Vec::new();
+        for scenario in &fixture.event_scenarios {
+            for method in &scenario.required_order {
+                let (listener, method) = method
+                    .strip_prefix("Base.")
+                    .map(|method| ("Base", method))
+                    .unwrap_or(("RecordedListener", method.as_str()));
+                events.push(ReplayEvent {
+                    scenario: scenario.name.clone(),
+                    listener: listener.to_string(),
+                    method: method.to_string(),
+                    payload: serde_json::Value::Null,
+                });
+            }
+        }
+        events
+    }
+
+    fn temp_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "openim-replay-capture-{name}-{}.json",
+            std::process::id()
+        ))
     }
 }

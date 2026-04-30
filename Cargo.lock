@@ -1201,6 +1201,8 @@ dependencies = [
  "anyhow",
  "clap",
  "openim-compat-tests",
+ "openim-session",
+ "openim-types",
  "serde_json",
 ]
 
