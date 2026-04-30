@@ -1,6 +1,7 @@
 #include "openim_ffi.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 
 static int check_openim(int code, OpenImFfiSession *session) {
   if (code == OPENIM_FFI_OK) {
@@ -17,11 +18,21 @@ static void on_session_event(void *user_data, const char *event, const char *pay
   printf("OpenIM session event: %s %s\n", event, payload_json);
 }
 
+static const char *env_or_default(const char *name, const char *fallback) {
+  const char *value = getenv(name);
+  return (value && value[0] != '\0') ? value : fallback;
+}
+
 int main(void) {
+  const char *api_addr = env_or_default("OPENIM_API_ADDR", "https://api.openim.test");
+  const char *ws_addr = env_or_default("OPENIM_WS_ADDR", "wss://ws.openim.test");
+  const char *user_id = env_or_default("OPENIM_USER_ID", "u1");
+  const char *token = env_or_default("OPENIM_TOKEN", "token");
+
   OpenImFfiSession *session = openim_session_create(
-      "https://api.openim.test",
-      "wss://ws.openim.test",
-      OPENIM_PLATFORM_LINUX);
+      api_addr,
+      ws_addr,
+      OPENIM_PLATFORM_MACOS);
   if (!session) {
     fprintf(stderr, "OpenIM session create failed\n");
     return 1;
@@ -29,12 +40,14 @@ int main(void) {
 
   uint64_t listener_id = openim_session_register_listener(session, on_session_event, NULL);
   if (listener_id == 0) {
-    return check_openim(OPENIM_FFI_ERROR, session);
+    int result = check_openim(OPENIM_FFI_ERROR, session);
+    openim_session_destroy(session);
+    return result == 0 ? 0 : 1;
   }
 
   int code = openim_session_init(session);
   if (code == OPENIM_FFI_OK) {
-    code = openim_session_login(session, "u1", "token");
+    code = openim_session_login(session, user_id, token);
   }
   if (code == OPENIM_FFI_OK) {
     code = openim_session_logout(session);

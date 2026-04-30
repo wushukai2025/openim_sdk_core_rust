@@ -476,7 +476,98 @@ mod tests {
         assert!(HEADER.contains("OpenImFfiSession"));
         assert!(HEADER.contains("OPENIM_PLATFORM_IOS"));
         assert!(HEADER.contains("OPENIM_PLATFORM_ANDROID"));
-        assert!(HEADER.contains("OPENIM_PLATFORM_LINUX"));
+        assert!(HEADER.contains("OPENIM_PLATFORM_MACOS"));
+        assert_contains_all(
+            DESKTOP_EXAMPLE,
+            &[
+                "OPENIM_PLATFORM_MACOS",
+                "OPENIM_API_ADDR",
+                "OPENIM_WS_ADDR",
+                "OPENIM_USER_ID",
+                "OPENIM_TOKEN",
+            ],
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn desktop_c_example_builds_and_runs_against_local_staticlib() {
+        use std::fs;
+        use std::path::PathBuf;
+        use std::process::Command;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let target_dir = std::env::current_exe()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        let workspace_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        let staticlib_path = target_dir.join("libopenim_ffi.a");
+        assert!(
+            staticlib_path.is_file(),
+            "missing staticlib at {}",
+            staticlib_path.display()
+        );
+
+        let temp_dir = std::env::temp_dir().join(format!(
+            "openim-desktop-c-example-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&temp_dir).unwrap();
+        let binary_path = temp_dir.join("openim_desktop_lifecycle");
+
+        let compile = Command::new("clang")
+            .current_dir(&workspace_dir)
+            .arg("-I")
+            .arg("crates/openim-ffi/include")
+            .arg("examples/desktop-c/openim_desktop_lifecycle.c")
+            .arg(&staticlib_path)
+            .arg("-o")
+            .arg(&binary_path)
+            .output()
+            .unwrap();
+        assert!(
+            compile.status.success(),
+            "clang failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&compile.stdout),
+            String::from_utf8_lossy(&compile.stderr)
+        );
+
+        let run = Command::new(&binary_path)
+            .env("OPENIM_API_ADDR", "https://api.openim.test")
+            .env("OPENIM_WS_ADDR", "wss://ws.openim.test")
+            .env("OPENIM_USER_ID", "u1")
+            .env("OPENIM_TOKEN", "token")
+            .output()
+            .unwrap();
+        assert!(
+            run.status.success(),
+            "desktop example failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&run.stdout),
+            String::from_utf8_lossy(&run.stderr)
+        );
+
+        let stdout = String::from_utf8_lossy(&run.stdout);
+        assert!(stdout.contains("OpenIM session event: listenerRegistered"));
+        assert!(stdout.contains("OpenIM session event: initialized {}"));
+        assert!(stdout.contains("OpenIM session event: loggedIn {\"userId\":\"u1\"}"));
+        assert!(stdout.contains("OpenIM session event: loggedOut {\"userId\":\"u1\"}"));
+        assert!(stdout.contains("OpenIM session event: uninitialized {}"));
+
+        let _ = fs::remove_file(&binary_path);
+        let _ = fs::remove_dir_all(&temp_dir);
     }
 
     fn assert_contains_all(source: &str, needles: &[&str]) {
