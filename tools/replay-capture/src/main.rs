@@ -14,7 +14,9 @@ use openim_compat_tests::{
     validate_replay_transcript, ReplayEvent,
 };
 use openim_protocol::{GetMaxSeqResp, WsReqIdentifier};
-use openim_session::{LoginCredentials, OpenImSession, SessionConfig, SessionEvent};
+use openim_session::{
+    LoginCredentials, OpenImSession, SessionConfig, SessionEvent, SessionResourceKind,
+};
 use openim_transport::{
     build_get_newest_seq_request, ClientConfig, OpenImWsClient, TransportEvent,
 };
@@ -593,6 +595,14 @@ fn session_event_to_replay_event(scenario: &str, event: &SessionEvent) -> Replay
         }
         SessionEvent::TaskStarted { name } => ("TaskStarted", json!({ "name": name })),
         SessionEvent::TaskStopped { name } => ("TaskStopped", json!({ "name": name })),
+        SessionEvent::ResourceOpened { kind, name } => (
+            "ResourceOpened",
+            json!({ "kind": session_resource_kind(*kind), "name": name }),
+        ),
+        SessionEvent::ResourceClosed { kind, name } => (
+            "ResourceClosed",
+            json!({ "kind": session_resource_kind(*kind), "name": name }),
+        ),
         SessionEvent::NewMessages { messages } => {
             ("NewMessages", json!({ "count": messages.len() }))
         }
@@ -607,6 +617,14 @@ fn session_event_to_replay_event(scenario: &str, event: &SessionEvent) -> Replay
         listener: "RustSession".to_string(),
         method: method.to_string(),
         payload,
+    }
+}
+
+fn session_resource_kind(kind: SessionResourceKind) -> &'static str {
+    match kind {
+        SessionResourceKind::Storage => "storage",
+        SessionResourceKind::Transport => "transport",
+        SessionResourceKind::Sync => "sync",
     }
 }
 

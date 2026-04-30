@@ -110,6 +110,13 @@ pub enum SessionState {
     Uninitialized,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionResourceKind {
+    Storage,
+    Transport,
+    Sync,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SessionEvent {
     Initialized,
@@ -132,6 +139,14 @@ pub enum SessionEvent {
     TaskStopped {
         name: String,
     },
+    ResourceOpened {
+        kind: SessionResourceKind,
+        name: String,
+    },
+    ResourceClosed {
+        kind: SessionResourceKind,
+        name: String,
+    },
     NewMessages {
         messages: Vec<ChatMessage>,
     },
@@ -145,6 +160,153 @@ pub enum StorageTarget {
     Unconfigured,
     Sqlite { path: PathBuf },
     IndexedDb { name: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionResourceInfo {
+    pub kind: SessionResourceKind,
+    pub name: String,
+}
+
+pub trait SessionResourceHandle: Send {
+    fn close(&mut self) -> Result<()>;
+}
+
+pub struct SessionResource {
+    kind: SessionResourceKind,
+    name: String,
+    handle: Box<dyn SessionResourceHandle>,
+}
+
+impl SessionResource {
+    pub fn new(
+        kind: SessionResourceKind,
+        name: impl Into<String>,
+        handle: impl SessionResourceHandle + 'static,
+    ) -> Result<Self> {
+        let name = name.into();
+        ensure_not_empty(&name, "resource_name")?;
+        Ok(Self {
+            kind,
+            name,
+            handle: Box::new(handle),
+        })
+    }
+
+    pub fn kind(&self) -> SessionResourceKind {
+        self.kind
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn info(&self) -> SessionResourceInfo {
+        SessionResourceInfo {
+            kind: self.kind,
+            name: self.name.clone(),
+        }
+    }
+
+    fn close(&mut self) -> Result<()> {
+        self.handle.close()
+    }
+}
+
+pub struct SessionRuntimeResources {
+    user_id: UserId,
+    transport: TransportConfig,
+    storage: StorageTarget,
+    resources: Vec<SessionResource>,
+}
+
+impl SessionRuntimeResources {
+    pub fn new(
+        user_id: impl Into<UserId>,
+        transport: TransportConfig,
+        storage: StorageTarget,
+    ) -> Result<Self> {
+        let user_id = user_id.into();
+        ensure_not_empty(&user_id, "user_id")?;
+        Ok(Self {
+            user_id,
+            transport,
+            storage,
+            resources: Vec::new(),
+        })
+    }
+
+    pub fn add_resource(&mut self, resource: SessionResource) {
+        self.resources.push(resource);
+    }
+
+    pub fn user_id(&self) -> &str {
+        &self.user_id
+    }
+
+    pub fn transport(&self) -> &TransportConfig {
+        &self.transport
+    }
+
+    pub fn storage(&self) -> &StorageTarget {
+        &self.storage
+    }
+
+    pub fn resource_infos(&self) -> Vec<SessionResourceInfo> {
+        self.resources.iter().map(SessionResource::info).collect()
+    }
+
+    fn ensure_matches(
+        &self,
+        credentials: &LoginCredentials,
+        transport: &TransportConfig,
+        storage: &StorageTarget,
+    ) -> Result<()> {
+        if self.user_id != credentials.user_id {
+            return Err(OpenImError::sdk_internal(
+                "resource adapter returned resources for a different user",
+            ));
+        }
+        if !same_transport_config(&self.transport, transport) {
+            return Err(OpenImError::sdk_internal(
+                "resource adapter returned resources for a different transport config",
+            ));
+        }
+        if self.storage != *storage {
+            return Err(OpenImError::sdk_internal(
+                "resource adapter returned resources for a different storage target",
+            ));
+        }
+        Ok(())
+    }
+
+    fn close_all(&mut self) -> Result<Vec<SessionResourceInfo>> {
+        let mut closed = Vec::new();
+        let mut remaining = Vec::new();
+        let mut first_error = None;
+
+        while let Some(mut resource) = self.resources.pop() {
+            let info = resource.info();
+            match resource.close() {
+                Ok(()) => closed.push(info),
+                Err(err) => {
+                    if first_error.is_none() {
+                        first_error = Some(err);
+                    }
+                    remaining.push(resource);
+                }
+            }
+        }
+
+        remaining.reverse();
+        self.resources = remaining;
+
+        if let Some(err) = first_error {
+            return Err(err);
+        }
+
+        Ok(closed)
+    }
 }
 
 #[derive(Debug, Default)]
@@ -266,7 +428,7 @@ pub trait SessionResourceAdapter: Send {
         credentials: &LoginCredentials,
         transport: &TransportConfig,
         storage: &StorageTarget,
-    ) -> Result<()>;
+    ) -> Result<SessionRuntimeResources>;
     fn logout(&mut self, user_id: &str) -> Result<()>;
     fn uninit(&mut self) -> Result<()>;
 }
@@ -282,11 +444,15 @@ impl SessionResourceAdapter for NoopSessionResourceAdapter {
     fn login(
         &mut self,
         _config: &SessionConfig,
-        _credentials: &LoginCredentials,
-        _transport: &TransportConfig,
-        _storage: &StorageTarget,
-    ) -> Result<()> {
-        Ok(())
+        credentials: &LoginCredentials,
+        transport: &TransportConfig,
+        storage: &StorageTarget,
+    ) -> Result<SessionRuntimeResources> {
+        SessionRuntimeResources::new(
+            credentials.user_id.clone(),
+            transport.clone(),
+            storage.clone(),
+        )
     }
 
     fn logout(&mut self, _user_id: &str) -> Result<()> {
@@ -306,6 +472,7 @@ pub struct OpenImSession {
     listeners: ListenerRegistry,
     tasks: TaskSupervisor,
     resources: Box<dyn SessionResourceAdapter>,
+    runtime_resources: Option<SessionRuntimeResources>,
 }
 
 impl OpenImSession {
@@ -326,6 +493,7 @@ impl OpenImSession {
             listeners: ListenerRegistry::new(),
             tasks: TaskSupervisor::new(),
             resources,
+            runtime_resources: None,
         })
     }
 
@@ -353,13 +521,23 @@ impl OpenImSession {
 
         let transport = self.config.transport_config(&credentials)?;
         let storage = self.config.storage_target(&credentials.user_id)?;
-        self.resources
-            .login(&self.config, &credentials, &transport, &storage)?;
+        let runtime_resources =
+            self.resources
+                .login(&self.config, &credentials, &transport, &storage)?;
+        runtime_resources.ensure_matches(&credentials, &transport, &storage)?;
+        let opened_resources = runtime_resources.resource_infos();
         self.login_user_id = Some(credentials.user_id.clone());
+        self.runtime_resources = Some(runtime_resources);
         self.domains = DomainServices::default();
         self.state = SessionState::LoggedIn;
         self.start_task(TRANSPORT_TASK)?;
         self.start_task(SYNC_TASK)?;
+        for resource in opened_resources {
+            self.emit(SessionEvent::ResourceOpened {
+                kind: resource.kind,
+                name: resource.name,
+            });
+        }
         self.emit(SessionEvent::LoggedIn {
             user_id: credentials.user_id,
         });
@@ -372,20 +550,34 @@ impl OpenImSession {
         };
 
         self.resources.logout(&user_id)?;
+        let closed_resources = self.close_runtime_resources()?;
         self.stop_all_tasks();
         self.login_user_id = None;
         self.domains = DomainServices::default();
         self.state = SessionState::LoggedOut;
+        for resource in closed_resources {
+            self.emit(SessionEvent::ResourceClosed {
+                kind: resource.kind,
+                name: resource.name,
+            });
+        }
         self.emit(SessionEvent::LoggedOut { user_id });
         Ok(())
     }
 
     pub fn uninit(&mut self) -> Result<()> {
         self.resources.uninit()?;
+        let closed_resources = self.close_runtime_resources()?;
         self.stop_all_tasks();
         self.login_user_id = None;
         self.domains = DomainServices::default();
         self.state = SessionState::Uninitialized;
+        for resource in closed_resources {
+            self.emit(SessionEvent::ResourceClosed {
+                kind: resource.kind,
+                name: resource.name,
+            });
+        }
         self.emit(SessionEvent::Uninitialized);
         Ok(())
     }
@@ -477,6 +669,20 @@ impl OpenImSession {
         self.tasks.is_running(name)
     }
 
+    pub fn runtime_resources(&self) -> Option<&SessionRuntimeResources> {
+        self.runtime_resources.as_ref()
+    }
+
+    fn close_runtime_resources(&mut self) -> Result<Vec<SessionResourceInfo>> {
+        let Some(resources) = &mut self.runtime_resources else {
+            return Ok(Vec::new());
+        };
+
+        let closed = resources.close_all()?;
+        self.runtime_resources = None;
+        Ok(closed)
+    }
+
     fn stop_all_tasks(&mut self) {
         for name in self.tasks.stop_all() {
             self.emit(SessionEvent::TaskStopped { name });
@@ -501,6 +707,19 @@ fn ensure_not_empty(value: &str, field: &str) -> Result<()> {
     } else {
         Ok(())
     }
+}
+
+fn same_transport_config(left: &TransportConfig, right: &TransportConfig) -> bool {
+    left.ws_addr == right.ws_addr
+        && left.user_id == right.user_id
+        && left.token == right.token
+        && left.platform_id == right.platform_id
+        && left.operation_id == right.operation_id
+        && left.sdk_type == right.sdk_type
+        && left.sdk_version == right.sdk_version
+        && left.is_background == right.is_background
+        && left.compression == right.compression
+        && left.send_response == right.send_response
 }
 
 #[cfg(test)]
@@ -737,6 +956,85 @@ mod tests {
         );
     }
 
+    #[test]
+    fn logout_closes_runtime_resource_handles() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let events = Arc::new(Mutex::new(Vec::<SessionEvent>::new()));
+        let adapter = HandleAdapter {
+            calls: calls.clone(),
+        };
+        let captured = events.clone();
+        let mut session =
+            OpenImSession::with_resource_adapter(config(), Box::new(adapter)).unwrap();
+        session.register_listener(move |event| {
+            captured.lock().unwrap().push(event.clone());
+        });
+
+        session.init().unwrap();
+        session.login(credentials()).unwrap();
+
+        let resources = session.runtime_resources().unwrap();
+        assert_eq!(resources.user_id(), "u1");
+        assert_eq!(
+            resources.resource_infos(),
+            vec![
+                SessionResourceInfo {
+                    kind: SessionResourceKind::Storage,
+                    name: "storage:OpenIM_v3_u1".to_string(),
+                },
+                SessionResourceInfo {
+                    kind: SessionResourceKind::Transport,
+                    name: "transport:wss://ws.openim.test".to_string(),
+                },
+            ]
+        );
+
+        session.logout().unwrap();
+
+        assert!(session.runtime_resources().is_none());
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec![
+                "close:transport:wss://ws.openim.test".to_string(),
+                "close:storage:OpenIM_v3_u1".to_string(),
+            ]
+        );
+
+        let events = events.lock().unwrap();
+        assert!(events.contains(&SessionEvent::ResourceOpened {
+            kind: SessionResourceKind::Storage,
+            name: "storage:OpenIM_v3_u1".to_string(),
+        }));
+        assert!(events.contains(&SessionEvent::ResourceClosed {
+            kind: SessionResourceKind::Transport,
+            name: "transport:wss://ws.openim.test".to_string(),
+        }));
+    }
+
+    #[test]
+    fn uninit_closes_runtime_resource_handles() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let adapter = HandleAdapter {
+            calls: calls.clone(),
+        };
+        let mut session =
+            OpenImSession::with_resource_adapter(config(), Box::new(adapter)).unwrap();
+
+        session.init().unwrap();
+        session.login(credentials()).unwrap();
+        session.uninit().unwrap();
+
+        assert!(session.runtime_resources().is_none());
+        assert_eq!(session.state(), SessionState::Uninitialized);
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec![
+                "close:transport:wss://ws.openim.test".to_string(),
+                "close:storage:OpenIM_v3_u1".to_string(),
+            ]
+        );
+    }
+
     struct RecordingAdapter {
         calls: Arc<Mutex<Vec<String>>>,
     }
@@ -753,7 +1051,7 @@ mod tests {
             credentials: &LoginCredentials,
             transport: &TransportConfig,
             storage: &StorageTarget,
-        ) -> Result<()> {
+        ) -> Result<SessionRuntimeResources> {
             let storage_name = match storage {
                 StorageTarget::IndexedDb { name } => name.clone(),
                 StorageTarget::Sqlite { path } => path.display().to_string(),
@@ -763,7 +1061,11 @@ mod tests {
                 "login:{}:{}:{}",
                 credentials.user_id, transport.ws_addr, storage_name
             ));
-            Ok(())
+            SessionRuntimeResources::new(
+                credentials.user_id.clone(),
+                transport.clone(),
+                storage.clone(),
+            )
         }
 
         fn logout(&mut self, user_id: &str) -> Result<()> {
@@ -773,6 +1075,76 @@ mod tests {
 
         fn uninit(&mut self) -> Result<()> {
             self.calls.lock().unwrap().push("uninit".to_string());
+            Ok(())
+        }
+    }
+
+    struct HandleAdapter {
+        calls: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl SessionResourceAdapter for HandleAdapter {
+        fn init(&mut self, _config: &SessionConfig) -> Result<()> {
+            Ok(())
+        }
+
+        fn login(
+            &mut self,
+            _config: &SessionConfig,
+            credentials: &LoginCredentials,
+            transport: &TransportConfig,
+            storage: &StorageTarget,
+        ) -> Result<SessionRuntimeResources> {
+            let mut resources = SessionRuntimeResources::new(
+                credentials.user_id.clone(),
+                transport.clone(),
+                storage.clone(),
+            )?;
+            let storage_name = match storage {
+                StorageTarget::IndexedDb { name } => format!("storage:{name}"),
+                StorageTarget::Sqlite { path } => format!("storage:{}", path.display()),
+                StorageTarget::Unconfigured => "storage:unconfigured".to_string(),
+            };
+            resources.add_resource(SessionResource::new(
+                SessionResourceKind::Storage,
+                storage_name.clone(),
+                RecordingHandle {
+                    name: storage_name,
+                    calls: self.calls.clone(),
+                },
+            )?);
+            let transport_name = format!("transport:{}", transport.ws_addr);
+            resources.add_resource(SessionResource::new(
+                SessionResourceKind::Transport,
+                transport_name.clone(),
+                RecordingHandle {
+                    name: transport_name,
+                    calls: self.calls.clone(),
+                },
+            )?);
+            Ok(resources)
+        }
+
+        fn logout(&mut self, _user_id: &str) -> Result<()> {
+            Ok(())
+        }
+
+        fn uninit(&mut self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    struct RecordingHandle {
+        name: String,
+        calls: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl SessionResourceHandle for RecordingHandle {
+        fn close(&mut self) -> Result<()> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("close:{}", self.name));
             Ok(())
         }
     }
