@@ -72,6 +72,8 @@ fn js_error(error: impl ToString) -> JsValue {
 mod tests {
     use super::*;
 
+    const WEB_EXAMPLE: &str = include_str!("../../../examples/web/openim_lifecycle.ts");
+
     #[test]
     fn wasm_session_lifecycle_exports_basic_state() {
         let mut session = OpenImWasmSession::new(
@@ -97,5 +99,19 @@ mod tests {
             OpenImWasmSession::callback_thread_policy(),
             "host_event_loop"
         );
+    }
+
+    #[test]
+    fn web_example_uses_wasm_lifecycle_exports() {
+        for export in [
+            "OpenImWasmSession",
+            "session.init()",
+            "session.login",
+            "session.logout()",
+            "session.uninit()",
+            "session.stateCode()",
+        ] {
+            assert!(WEB_EXAMPLE.contains(export), "missing {export}");
+        }
     }
 }

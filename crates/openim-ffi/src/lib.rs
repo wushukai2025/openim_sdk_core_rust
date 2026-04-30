@@ -178,6 +178,24 @@ fn c_string_lossy(value: &str) -> CString {
 mod tests {
     use super::*;
 
+    const HEADER: &str = include_str!("../include/openim_ffi.h");
+    const DESKTOP_EXAMPLE: &str =
+        include_str!("../../../examples/desktop-c/openim_desktop_lifecycle.c");
+    const IOS_EXAMPLE: &str =
+        include_str!("../../../examples/ios-swift/OpenIMLifecycleExample.swift");
+    const ANDROID_KOTLIN_EXAMPLE: &str =
+        include_str!("../../../examples/android-kotlin/OpenIMLifecycleExample.kt");
+    const ANDROID_JNI_EXAMPLE: &str =
+        include_str!("../../../examples/android-kotlin/openim_jni_lifecycle.cc");
+    const LIFECYCLE_EXPORTS: &[&str] = &[
+        "openim_session_create",
+        "openim_session_init",
+        "openim_session_login",
+        "openim_session_logout",
+        "openim_session_uninit",
+        "openim_session_destroy",
+    ];
+
     fn c_string(value: &str) -> CString {
         CString::new(value).unwrap()
     }
@@ -252,6 +270,35 @@ mod tests {
                     .unwrap(),
                 "sdk_serialized_callback_queue"
             );
+        }
+    }
+
+    #[test]
+    fn native_header_and_examples_cover_lifecycle_exports() {
+        assert_contains_all(HEADER, LIFECYCLE_EXPORTS);
+        assert_contains_all(DESKTOP_EXAMPLE, LIFECYCLE_EXPORTS);
+        assert_contains_all(IOS_EXAMPLE, LIFECYCLE_EXPORTS);
+        assert_contains_all(ANDROID_JNI_EXAMPLE, LIFECYCLE_EXPORTS);
+        assert_contains_all(
+            ANDROID_KOTLIN_EXAMPLE,
+            &[
+                "openimSessionCreate",
+                "openimSessionInit",
+                "openimSessionLogin",
+                "openimSessionLogout",
+                "openimSessionUninit",
+                "openimSessionDestroy",
+            ],
+        );
+        assert!(HEADER.contains("OpenImFfiSession"));
+        assert!(HEADER.contains("OPENIM_PLATFORM_IOS"));
+        assert!(HEADER.contains("OPENIM_PLATFORM_ANDROID"));
+        assert!(HEADER.contains("OPENIM_PLATFORM_LINUX"));
+    }
+
+    fn assert_contains_all(source: &str, needles: &[&str]) {
+        for needle in needles {
+            assert!(source.contains(needle), "missing {needle}");
         }
     }
 }
