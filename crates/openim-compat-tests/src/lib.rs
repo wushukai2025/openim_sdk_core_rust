@@ -2,7 +2,7 @@ use std::{collections::BTreeSet, fs, io, path::Path};
 
 #[cfg(test)]
 use openim_errors::ErrorCode;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize)]
 pub struct ContractFixture {
@@ -51,7 +51,7 @@ pub struct ErrorContract {
     pub category: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ReplayEvent {
     pub scenario: String,
     pub listener: String,
