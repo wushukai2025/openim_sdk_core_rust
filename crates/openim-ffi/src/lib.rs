@@ -311,6 +311,12 @@ fn c_string_lossy(value: &str) -> CString {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+    use std::sync::mpsc;
+    use std::thread;
+
+    use futures_util::{SinkExt, StreamExt};
+    use tokio::net::TcpListener;
+    use tokio_tungstenite::{accept_async, tungstenite::Message as WsMessage};
 
     const HEADER: &str = include_str!("../include/openim_ffi.h");
     const DESKTOP_EXAMPLE: &str =
@@ -347,7 +353,7 @@ mod tests {
     #[test]
     fn c_abi_session_lifecycle_uses_opaque_handle() {
         let api_addr = c_string("https://api.openim.test");
-        let ws_addr = c_string("wss://ws.openim.test");
+        let ws_addr = c_string(&spawn_transport_server());
         let user_id = c_string("u1");
         let token = c_string("token");
 
@@ -434,7 +440,7 @@ mod tests {
     #[test]
     fn c_abi_listener_dispatches_lifecycle_events() {
         let api_addr = c_string("https://api.openim.test");
-        let ws_addr = c_string("wss://ws.openim.test");
+        let ws_addr = c_string(&spawn_transport_server());
         let user_id = c_string("u1");
         let token = c_string("token");
         let mut events = Vec::<(String, String)>::new();
@@ -498,7 +504,7 @@ mod tests {
     #[test]
     fn c_abi_create_with_data_dir_opens_native_storage_resource() {
         let api_addr = c_string("https://api.openim.test");
-        let ws_addr = c_string("wss://ws.openim.test");
+        let ws_addr = c_string(&spawn_transport_server());
         let user_id = c_string("u1");
         let token = c_string("token");
         let data_dir = unique_temp_dir("ffi-data-dir");
@@ -641,7 +647,7 @@ mod tests {
 
         let run = Command::new(&binary_path)
             .env("OPENIM_API_ADDR", "https://api.openim.test")
-            .env("OPENIM_WS_ADDR", "wss://ws.openim.test")
+            .env("OPENIM_WS_ADDR", spawn_transport_server())
             .env("OPENIM_USER_ID", "u1")
             .env("OPENIM_TOKEN", "token")
             .env("OPENIM_DATA_DIR", temp_dir.join("db"))
@@ -673,6 +679,39 @@ mod tests {
             .unwrap()
             .as_nanos();
         std::env::temp_dir().join(format!("openim-ffi-{label}-{}-{now}", std::process::id()))
+    }
+
+    fn spawn_transport_server() -> String {
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            runtime.block_on(async move {
+                let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let addr = listener.local_addr().unwrap();
+                tx.send(format!("ws://{addr}/msg_gateway")).unwrap();
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut ws = accept_async(stream).await.unwrap();
+                ws.send(WsMessage::Text(r#"{"errCode":0}"#.into()))
+                    .await
+                    .unwrap();
+
+                while let Some(frame) = ws.next().await {
+                    match frame.unwrap() {
+                        WsMessage::Text(text) if text.contains(r#""type":"ping""#) => {
+                            ws.send(WsMessage::Text(r#"{"type":"pong"}"#.into()))
+                                .await
+                                .unwrap();
+                        }
+                        WsMessage::Close(_) => break,
+                        _ => {}
+                    }
+                }
+            });
+        });
+        rx.recv().unwrap()
     }
 
     fn assert_contains_all(source: &str, needles: &[&str]) {

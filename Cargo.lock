@@ -804,10 +804,13 @@ dependencies = [
 name = "openim-ffi"
 version = "0.1.0"
 dependencies = [
+ "futures-util",
  "openim-session",
  "openim-session-native",
  "openim-types",
  "serde_json",
+ "tokio",
+ "tokio-tungstenite",
 ]
 
 [[package]]
@@ -839,12 +842,16 @@ dependencies = [
 name = "openim-session-native"
 version = "0.1.0"
 dependencies = [
+ "futures-util",
  "openim-errors",
  "openim-session",
  "openim-storage-core",
  "openim-storage-sqlite",
  "openim-transport-core",
+ "openim-transport-native",
  "openim-types",
+ "tokio",
+ "tokio-tungstenite",
 ]
 
 [[package]]

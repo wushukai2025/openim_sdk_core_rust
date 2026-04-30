@@ -13,6 +13,10 @@ openim-transport-core = { path = "../openim-transport-core" }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 openim-storage-core = { path = "../openim-storage-core" }
 openim-storage-sqlite = { path = "../openim-storage-sqlite" }
+openim-transport-native = { path = "../openim-transport-native" }
+tokio.workspace = true
 
 [dev-dependencies]
+futures-util.workspace = true
+tokio-tungstenite.workspace = true
 openim-types = { path = "../openim-types" }

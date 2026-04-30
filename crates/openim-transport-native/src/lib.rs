@@ -264,6 +264,11 @@ impl NativeWsClient {
             }
         }
     }
+
+    pub async fn close(&mut self) -> Result<()> {
+        self.stream.close(None).await?;
+        Ok(())
+    }
 }
 
 async fn connect_stream(config: &TransportConfig) -> Result<WsStream> {
