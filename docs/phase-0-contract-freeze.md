@@ -43,37 +43,37 @@ Phase 0 的本地可验证契约冻结骨架已告一段落：公开生命周期
 <!-- code-ref: phase0-replay-event -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-compat-tests/src/lib.rs#L55 -->
 
 - <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase0-validate-fixture">validate_fixture</code> 统一校验 fixture 版本、Go SDK 来源、API 名、listener 名、scenario 名和 error 名不为空且不重复。
-<!-- code-ref: phase0-validate-fixture -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-compat-tests/src/lib.rs#L100 -->
+<!-- code-ref: phase0-validate-fixture -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-compat-tests/src/lib.rs#L109 -->
 
 - <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase0-extract-go-source-contract">extract_go_source_contract</code> 从 Go SDK 源码自动抽取 open_im_sdk 导出函数和 callback_client.go listener interface，作为后续全量契约冻结的源码基线。
-<!-- code-ref: phase0-extract-go-source-contract -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-compat-tests/src/lib.rs#L133 -->
+<!-- code-ref: phase0-extract-go-source-contract -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-compat-tests/src/lib.rs#L142 -->
 
 - <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase0-validate-replay-transcript">validate_replay_transcript</code> 校验真实回放 transcript 是否覆盖 fixture 中所有 required scenario 和 required event 顺序。
-<!-- code-ref: phase0-validate-replay-transcript -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-compat-tests/src/lib.rs#L242 -->
+<!-- code-ref: phase0-validate-replay-transcript -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-compat-tests/src/lib.rs#L251 -->
 
 - <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase0-compare-replay-scenario">compare_replay_scenario</code> 对比 Go 与 Rust 同一 scenario 的事件序列，作为后续双栈回放 Gate 的本地断言入口。
-<!-- code-ref: phase0-compare-replay-scenario -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-compat-tests/src/lib.rs#L299 -->
+<!-- code-ref: phase0-compare-replay-scenario -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-compat-tests/src/lib.rs#L308 -->
 
 - <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase0-binding-callback-contracts">binding_callback_contracts</code> 根据 listener surface 生成 native C ABI 和 wasm 回调名，并冻结 native 串行 SDK 回调队列与 wasm host event loop 线程语义。
-<!-- code-ref: phase0-binding-callback-contracts -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-compat-tests/src/lib.rs#L342 -->
+<!-- code-ref: phase0-binding-callback-contracts -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-compat-tests/src/lib.rs#L351 -->
 
 - <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase0-validate-binding-callbacks">validate_binding_callback_contracts</code> 校验 native 回调名唯一、openim_ 前缀、wasm lowerCamelCase 命名和线程策略不漂移。
-<!-- code-ref: phase0-validate-binding-callbacks -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-compat-tests/src/lib.rs#L373 -->
+<!-- code-ref: phase0-validate-binding-callbacks -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-compat-tests/src/lib.rs#L382 -->
 
 - <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase0-error-code-test">go_error_codes_match_rust_error_constants</code> 将 Go SDK 错误码 fixture 和 Rust ErrorCode 常量逐项比对。
-<!-- code-ref: phase0-error-code-test -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-compat-tests/src/lib.rs#L567 -->
+<!-- code-ref: phase0-error-code-test -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-compat-tests/src/lib.rs#L645 -->
 
 - <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase0-event-order-test">event_sequences_preserve_critical_order</code> 固定登录同步场景中连接成功必须早于同步开始。
-<!-- code-ref: phase0-event-order-test -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-compat-tests/src/lib.rs#L583 -->
+<!-- code-ref: phase0-event-order-test -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-compat-tests/src/lib.rs#L661 -->
 
 - <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase0-real-go-replay-test">real_go_sdk_replay_transcript_matches_phase0_contract</code> 是真实 Go SDK 回放 transcript 的 ignored Gate，需要 OPENIM_GO_REPLAY_EVENTS 指向真实采集文件后执行。
-<!-- code-ref: phase0-real-go-replay-test -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-compat-tests/src/lib.rs#L643 -->
+<!-- code-ref: phase0-real-go-replay-test -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-compat-tests/src/lib.rs#L721 -->
 
 - <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase0-real-compare-replay-test">real_go_and_rust_replay_transcripts_match_phase0_sequences</code> 是 Go/Rust 双栈真实回放对比 ignored Gate，需要同时提供 Go 与 Rust transcript。
-<!-- code-ref: phase0-real-compare-replay-test -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-compat-tests/src/lib.rs#L671 -->
+<!-- code-ref: phase0-real-compare-replay-test -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-compat-tests/src/lib.rs#L749 -->
 
 - <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase0-binding-seed-test">binding_callback_contract_freezes_seed_names_and_threads</code> 固定核心 seed listener 的 native/wasm 回调名和线程策略。
-<!-- code-ref: phase0-binding-seed-test -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-compat-tests/src/lib.rs#L709 -->
+<!-- code-ref: phase0-binding-seed-test -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-compat-tests/src/lib.rs#L787 -->
 
 - <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase0-replay-capture-command">capture_command</code> 运行外部真实回放器命令，捕获 stdout JSONL 并输出标准 transcript。
 <!-- code-ref: phase0-replay-capture-command -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/tools/replay-capture/src/main.rs#L297 -->
@@ -103,10 +103,10 @@ Phase 0 的本地可验证契约冻结骨架已告一段落：公开生命周期
 <!-- code-ref: phase0-replay-rust-session-events -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/tools/replay-capture/src/main.rs#L413 -->
 
 - <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase0-auto-extract-test">auto_extracts_go_public_api_and_listener_surface_when_source_exists</code> 在本机 Go SDK 源码存在时冻结当前 134 个 open_im_sdk 导出函数和 14 个 listener interface 数量。
-<!-- code-ref: phase0-auto-extract-test -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-compat-tests/src/lib.rs#L763 -->
+<!-- code-ref: phase0-auto-extract-test -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-compat-tests/src/lib.rs#L884 -->
 
 - <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase0-fixture-subset-test">fixture_seed_is_subset_of_auto_extracted_go_surface_when_source_exists</code> 校验 Golden fixture 里的种子 API 和 listener 仍然能在 Go SDK 源码 surface 中找到。
-<!-- code-ref: phase0-fixture-subset-test -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-compat-tests/src/lib.rs#L825 -->
+<!-- code-ref: phase0-fixture-subset-test -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-compat-tests/src/lib.rs#L946 -->
 
 ## 当前覆盖范围
 

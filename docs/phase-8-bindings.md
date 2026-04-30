@@ -15,7 +15,7 @@ a:has(code[data-code-ref]) {
 
 ## 结论
 
-Phase 8 已先落地可本地编译的绑定层骨架：原生 C ABI crate、wasm-bindgen crate、句柄模型、基础生命周期 API、通用 session event listener 桥接、C header、desktop C、iOS Swift、Android Kotlin/JNI 和 Web TypeScript 生命周期示例源码已进入 workspace，并通过本地单元测试覆盖示例 API 漂移。当前仍不冒充平台交付：真实平台工程构建、真实平台打包产物、Go SDK 细分 listener 全量映射和真实服务端端到端验证仍属于后续 Gate。
+Phase 8 已先落地可本地编译的绑定层骨架：原生 C ABI crate、wasm-bindgen crate、句柄模型、基础生命周期 API、通用 session event listener 桥接、C header、desktop C、iOS Swift、Android Kotlin/JNI 和 Web TypeScript 生命周期示例源码已进入 workspace，并通过本地单元测试覆盖示例 API 漂移。当前已冻结已实现 Session event 到 Go 细分 listener 的第一批映射种子；仍不冒充平台交付：真实平台工程构建、真实平台打包产物、Go SDK 细分 listener 全量映射和真实服务端端到端验证仍属于后续 Gate。
 
 ## Rust 落地点
 
@@ -69,6 +69,10 @@ Phase 8 已先落地可本地编译的绑定层骨架：原生 C ABI crate、was
 - 本地 C ABI listener 测试 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase8-ffi-listener-test">c_abi_listener_dispatches_lifecycle_events</code> 固定 listenerRegistered、initialized、loggedIn 和 loggedOut 等生命周期事件顺序。
 <!-- code-ref: phase8-ffi-listener-test -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-ffi/src/lib.rs#L398 -->
 
+- 已实现 Session event 到 Go 细分 listener 的映射种子由 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase8-session-listener-mapping">session_event_listener_mappings</code> 固定，当前只覆盖 NewMessages -> OnAdvancedMsgListener.OnRecvNewMessage 和 ConversationChanged -> OnConversationListener.OnConversationChanged；<code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase8-session-listener-mapping-test">session_event_listener_mapping_covers_current_session_events</code> 会对 fixture 校验，源码存在时还会对 Go callback_client.go 自动抽取结果校验。
+<!-- code-ref: phase8-session-listener-mapping -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-compat-tests/src/lib.rs#L435 -->
+<!-- code-ref: phase8-session-listener-mapping-test -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-compat-tests/src/lib.rs#L815 -->
+
 - C ABI 对外声明已补 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase8-ffi-header">openim_ffi.h</code>，固定平台 ID、错误码、opaque handle 和 Init/Login/Logout/UnInit 函数签名。
 <!-- code-ref: phase8-ffi-header -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-ffi/include/openim_ffi.h#L1 -->
 
@@ -78,7 +82,7 @@ Phase 8 已先落地可本地编译的绑定层骨架：原生 C ABI crate、was
 - iOS 示例源码 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase8-ios-example">OpenIMLifecycleExample.swift</code> 通过 bridging header 使用 C ABI，注册通用 session event callback，并在 deinit 中清理 session handle。
 <!-- code-ref: phase8-ios-example -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/examples/ios-swift/OpenIMLifecycleExample.swift#L18 -->
 
-- Android 示例源码由 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase8-android-kotlin-example">OpenIMLifecycleExample.kt</code> 和 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase8-android-jni-example">openim_jni_lifecycle.cc</code> 组成，Kotlin 侧走 external 方法，JNI 侧转发到 C ABI。
+- Android 示例源码由 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase8-android-kotlin-example">OpenIMLifecycleExample.kt</code> 和 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase8-android-jni-example">openim_jni_lifecycle.cc</code> 组成，Kotlin 侧走 external 方法并注册 OpenIMSessionEventListener，JNI 侧转发 lifecycle 与 listener 注册/注销到 C ABI。
 <!-- code-ref: phase8-android-kotlin-example -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/examples/android-kotlin/OpenIMLifecycleExample.kt#L3 -->
 <!-- code-ref: phase8-android-jni-example -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/examples/android-kotlin/openim_jni_lifecycle.cc#L1 -->
 
@@ -93,6 +97,10 @@ Phase 8 已先落地可本地编译的绑定层骨架：原生 C ABI crate、was
 
 ```bash
 cargo fmt --all --check
+```
+
+```bash
+cargo test -p openim-compat-tests
 ```
 
 ```bash
@@ -117,6 +125,6 @@ cargo test --workspace
 
 ## Gate 状态
 
-当前已完成：C ABI crate 骨架、wasm-bindgen crate 骨架、opaque 句柄模型、基础生命周期 API、状态码读取、last error 读取、native 和 wasm 回调线程策略常量、通用 session event listener 注册/注销、C header、desktop C 示例源码、iOS Swift 示例源码、Android Kotlin/JNI 示例源码、Web TypeScript 示例源码、本地 C ABI 单元测试、本地 wasm 单元测试、listener 生命周期派发测试、示例 API 漂移检查、wasm32 编译检查和 workspace 回归。
+当前已完成：C ABI crate 骨架、wasm-bindgen crate 骨架、opaque 句柄模型、基础生命周期 API、状态码读取、last error 读取、native 和 wasm 回调线程策略常量、通用 session event listener 注册/注销、C header、desktop C 示例源码、iOS Swift 示例源码、Android Kotlin/JNI 生命周期与 listener 示例源码、Web TypeScript 示例源码、已实现 Session event 到 Go 细分 listener 的映射种子、本地 C ABI 单元测试、本地 wasm 单元测试、listener 生命周期派发测试、示例 API 漂移检查、wasm32 编译检查和 workspace 回归。
 
 当前未完成：iOS、Android、桌面和 Web 示例工程的真实平台构建；Swift/Kotlin/TypeScript 包装产物发布；Go SDK 细分 listener 全量映射和平台包装层派发；真实平台线程切换；真实服务端 Init、Login、Logout、UnInit 端到端验证。这些能力继续留在 R2-09 平台 Gate 和后续真实集成 Gate。
