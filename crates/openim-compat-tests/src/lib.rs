@@ -73,6 +73,15 @@ pub struct BindingCallbackContract {
     pub wasm_thread: &'static str,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SessionEventListenerMapping {
+    pub session_event: &'static str,
+    pub go_listener: &'static str,
+    pub go_method: &'static str,
+    pub payload_key: &'static str,
+    pub wrapper_policy: &'static str,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GoSourceContract {
     pub public_apis: Vec<GoPublicApi>,
@@ -423,6 +432,75 @@ pub fn validate_binding_callback_contracts(
     Ok(())
 }
 
+pub fn session_event_listener_mappings() -> &'static [SessionEventListenerMapping] {
+    &[
+        SessionEventListenerMapping {
+            session_event: "newMessages",
+            go_listener: "OnAdvancedMsgListener",
+            go_method: "OnRecvNewMessage",
+            payload_key: "messages",
+            wrapper_policy: "fan_out_each_message",
+        },
+        SessionEventListenerMapping {
+            session_event: "conversationChanged",
+            go_listener: "OnConversationListener",
+            go_method: "OnConversationChanged",
+            payload_key: "conversations",
+            wrapper_policy: "pass_conversation_list_json",
+        },
+    ]
+}
+
+pub fn validate_session_event_listener_mappings(
+    mappings: &[SessionEventListenerMapping],
+    listener_contracts: &[ListenerContract],
+) -> Result<(), String> {
+    if mappings.is_empty() {
+        return Err("session event listener mapping list is empty".to_string());
+    }
+
+    let mut seen_events = BTreeSet::new();
+    for mapping in mappings {
+        if mapping.session_event.is_empty()
+            || mapping.go_listener.is_empty()
+            || mapping.go_method.is_empty()
+            || mapping.payload_key.is_empty()
+            || mapping.wrapper_policy.is_empty()
+        {
+            return Err("session event listener mapping contains an empty field".to_string());
+        }
+        if !seen_events.insert(mapping.session_event) {
+            return Err(format!(
+                "duplicate session event listener mapping: {}",
+                mapping.session_event
+            ));
+        }
+
+        let Some(listener) = listener_contracts
+            .iter()
+            .find(|contract| contract.name == mapping.go_listener)
+        else {
+            return Err(format!(
+                "mapping targets missing Go listener: {}",
+                mapping.go_listener
+            ));
+        };
+        let has_method = listener
+            .methods
+            .iter()
+            .filter_map(|signature| listener_method_name(signature))
+            .any(|method| method == mapping.go_method);
+        if !has_method {
+            return Err(format!(
+                "mapping targets missing Go listener method: {}.{}",
+                mapping.go_listener, mapping.go_method
+            ));
+        }
+    }
+
+    Ok(())
+}
+
 fn listener_method_name(signature: &str) -> Option<&str> {
     let end = signature.find('(')?;
     let name = signature[..end].trim();
@@ -734,6 +812,49 @@ mod tests {
     }
 
     #[test]
+    fn session_event_listener_mapping_covers_current_session_events() {
+        let fixture = load_phase0_contract_fixture();
+        let mappings = session_event_listener_mappings();
+
+        validate_session_event_listener_mappings(mappings, &fixture.listener_contracts)
+            .expect("valid session event listener mapping");
+        assert_session_event_mapping(
+            mappings,
+            "newMessages",
+            "OnAdvancedMsgListener",
+            "OnRecvNewMessage",
+            "messages",
+            "fan_out_each_message",
+        );
+        assert_session_event_mapping(
+            mappings,
+            "conversationChanged",
+            "OnConversationListener",
+            "OnConversationChanged",
+            "conversations",
+            "pass_conversation_list_json",
+        );
+    }
+
+    #[test]
+    fn session_event_listener_mapping_matches_auto_extracted_source_when_source_exists() {
+        let Some(root) = available_go_sdk_root() else {
+            eprintln!(
+                "skipping session event listener mapping test: OpenIM Go SDK source is not available"
+            );
+            return;
+        };
+
+        let extracted = extract_go_source_contract(root).expect("extract Go SDK contract");
+
+        validate_session_event_listener_mappings(
+            session_event_listener_mappings(),
+            &extracted.listener_contracts,
+        )
+        .expect("valid session event listener mapping against Go source");
+    }
+
+    #[test]
     fn binding_callback_contract_covers_auto_extracted_listener_methods_when_source_exists() {
         let Some(root) = available_go_sdk_root() else {
             eprintln!(
@@ -916,5 +1037,24 @@ mod tests {
         assert_eq!(callback.wasm, wasm);
         assert_eq!(callback.native_thread, NATIVE_CALLBACK_THREAD);
         assert_eq!(callback.wasm_thread, WASM_CALLBACK_THREAD);
+    }
+
+    fn assert_session_event_mapping(
+        mappings: &[SessionEventListenerMapping],
+        session_event: &str,
+        go_listener: &str,
+        go_method: &str,
+        payload_key: &str,
+        wrapper_policy: &str,
+    ) {
+        let mapping = mappings
+            .iter()
+            .find(|mapping| mapping.session_event == session_event)
+            .unwrap_or_else(|| panic!("missing session event listener mapping: {session_event}"));
+
+        assert_eq!(mapping.go_listener, go_listener);
+        assert_eq!(mapping.go_method, go_method);
+        assert_eq!(mapping.payload_key, payload_key);
+        assert_eq!(mapping.wrapper_policy, wrapper_policy);
     }
 }
