@@ -790,6 +790,7 @@ dependencies = [
  "openim-sync",
  "openim-types",
  "serde",
+ "url",
 ]
 
 [[package]]

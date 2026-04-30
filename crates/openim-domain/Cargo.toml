@@ -10,3 +10,4 @@ openim-errors = { path = "../openim-errors" }
 openim-sync = { path = "../openim-sync" }
 openim-types = { path = "../openim-types" }
 serde.workspace = true
+url.workspace = true
