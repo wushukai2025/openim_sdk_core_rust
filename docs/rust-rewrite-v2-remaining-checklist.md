@@ -25,6 +25,21 @@ V2 从“Phase 7 离线核心边界已具备”继续推进到“可替换跨平
 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="v2-agents-gate-rule">AGENTS Gate rule</code>
 <!-- code-ref: v2-agents-gate-rule -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/AGENTS.md#L58 -->
 
+## 外部 Go 仓库依赖处理原则
+
+- <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="v2-protocol-go-module">protocol</code> 是协议契约来源，不是 Rust SDK 运行时依赖。Rust 侧继续由 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="v2-openim-protocol-dir">OPENIM_PROTOCOL_DIR</code> 或本地默认 protocol 目录读取 schema，并通过 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="v2-prost-build">prost-build</code> 与 vendored protoc 生成 Rust protobuf 类型；不要手改 Go 生成文件，也不要把 Go runtime 作为实现路径。
+  <!-- code-ref: v2-protocol-go-module -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/protocol/go.mod#L1 -->
+  <!-- code-ref: v2-openim-protocol-dir -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-protocol/build.rs#L6 -->
+  <!-- code-ref: v2-prost-build -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-protocol/Cargo.toml#L17 -->
+
+- <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="v2-tools-go-module">tools</code> 是 Go 工程工具箱，不是整库重写目标。SDK 所需行为只按实际使用面迁移：错误码和统一错误已经落到 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="v2-error-code">ErrorCode</code> 与 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="v2-openim-error">OpenImError</code>，JSON、base64、gzip 等通用能力优先使用 Rust 生态和 workspace 依赖；MQ、Redis、Mongo、Gin/gRPC 中间件、服务发现等服务端工具不进入 SDK 迁移范围，除非后续有明确 SDK 行为依赖。
+  <!-- code-ref: v2-tools-go-module -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/tools/go.mod#L1 -->
+  <!-- code-ref: v2-error-code -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-errors/src/lib.rs#L5 -->
+  <!-- code-ref: v2-openim-error -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-errors/src/lib.rs#L77 -->
+
+- 该原则不新增独立 Gate；若后续要求 Rust 仓库脱离旁边 Go checkout 独立构建，应新增的是必要 protocol schema 的 snapshot/vendor 同步与再生成验证任务，而不是扩大成 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="v2-protocol-build-input">openim-protocol</code> 与 Go 工具库的整库重写。
+  <!-- code-ref: v2-protocol-build-input -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-protocol/build.rs#L16 -->
+
 ## V2 剩余任务总表
 
 | 编号 | 阶段 | 状态 | 剩余任务 | 完成标准 |
