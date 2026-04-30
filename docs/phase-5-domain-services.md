@@ -1,6 +1,6 @@
 # Phase 5 Domain Services Report
 
-更新时间：2026-04-29
+更新时间：2026-04-30
 
 <style>
 code[data-code-ref],
@@ -15,7 +15,7 @@ a:has(code[data-code-ref]) {
 
 ## 结论
 
-Phase 5 已完成低耦合领域服务重构：用户资料查询与更新、好友与黑名单同步、群组与群成员同步、领域仓储边界、文件摘要、分片、断点续传状态、上传执行抽象和上传进度计算均已落地并通过单元测试。Phase 4 的真实 OpenIM server Gate 仍保持未通过状态；真实服务端收发、真实 HTTP 上传端点、SQLite 与 IndexedDB 具体表适配、Session 生命周期装配不在本阶段冒充完成，会继续留到后续真实集成 Gate。
+Phase 5 已完成低耦合领域服务重构：用户资料查询与更新、好友与黑名单同步、群组与群成员同步、领域仓储边界、文件摘要、分片、断点续传状态、对象上传请求契约、签名分片 PUT 边界、上传执行抽象和上传进度计算均已落地并通过单元测试。Phase 4 的真实 OpenIM server Gate 仍保持未通过状态；真实服务端收发、真实 HTTP 上传端点端到端执行、SQLite 与 IndexedDB 具体表适配、Session 生命周期装配不在本阶段冒充完成，会继续留到后续真实集成 Gate。
 
 ## Rust 落地点
 
@@ -65,25 +65,54 @@ Phase 5 已完成低耦合领域服务重构：用户资料查询与更新、好
 <!-- code-ref: phase5-sync-group-members -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-domain/src/group.rs#L136 -->
 
 - 文件域以 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase5-file-digest">FileDigest</code> 表达文件摘要，后续真实上传端点可以直接复用 file name、size、content type 和 sha256。
-<!-- code-ref: phase5-file-digest -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-domain/src/file.rs#L8 -->
+<!-- code-ref: phase5-file-digest -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-domain/src/file.rs#L15 -->
+
+- 对象上传 HTTP 路径已在领域层固定为 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase5-object-part-limit-path">OBJECT_PART_LIMIT_PATH</code> 同组常量，覆盖分片限制、初始化 multipart、签名和完成上传四个 OpenIM object API。
+<!-- code-ref: phase5-object-part-limit-path -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-domain/src/file.rs#L7 -->
+
+- 服务端分片限制由 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase5-object-part-limit">ObjectPartLimit</code> 承接，按 Go SDK 的 min part、max part 和 max part count 规则计算 part size。
+<!-- code-ref: phase5-object-part-limit -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-domain/src/file.rs#L78 -->
+
+- 上传对象参数由 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase5-upload-object-request">UploadObjectRequest</code> 承接，会校验 login user 和 name，并按 Go SDK 规则给对象名补 login user 前缀。
+<!-- code-ref: phase5-upload-object-request -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-domain/src/file.rs#L124 -->
+
+- 初始化和完成上传请求分别由 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase5-initiate-multipart-request">InitiateMultipartUploadRequest</code> 与 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase5-complete-multipart-request">CompleteMultipartUploadRequest</code> 固定，保留 hash、size、part size、max parts、cause、name、content type 和 url prefix 字段。
+<!-- code-ref: phase5-initiate-multipart-request -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-domain/src/file.rs#L162 -->
+<!-- code-ref: phase5-complete-multipart-request -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-domain/src/file.rs#L198 -->
+
+- 对象存储后端通过 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase5-object-storage-api">ObjectStorageApi</code> 抽象，覆盖 part limit、initiate、auth sign 和 complete；真实 HTTP 端点后续只需要实现该 trait。
+<!-- code-ref: phase5-object-storage-api -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-domain/src/file.rs#L259 -->
+
+- 签名后的分片 PUT 请求由 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase5-signed-upload-part-request">SignedUploadPartRequest</code> 表达，真正发起网络写入的边界收敛到 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase5-http-upload-client">HttpUploadClient</code>。
+<!-- code-ref: phase5-signed-upload-part-request -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-domain/src/file.rs#L251 -->
+<!-- code-ref: phase5-http-upload-client -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-domain/src/file.rs#L272 -->
+
+- 分片上传会话由 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase5-multipart-upload-session">MultipartUploadSession</code> 持有 upload id、part size、过期时间和已缓存签名；缺失 part sign 时按批量数量向后续 part number 续签。
+<!-- code-ref: phase5-multipart-upload-session -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-domain/src/file.rs#L285 -->
+
+- 签名上传执行器 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase5-signed-multipart-upload-client">SignedMultipartUploadClient</code> 复用已有 FileUploadClient 流程，把领域分片转换为签名 PUT 请求并校验回包 part number。
+<!-- code-ref: phase5-signed-multipart-upload-client -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-domain/src/file.rs#L376 -->
+
+- 签名 URL 构建由 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase5-build-signed-put-request">build_signed_put_request</code> 负责，按 Go SDK 行为合并 base URL、sign query、part query、sign header 和 part header，part 级凭据优先。
+<!-- code-ref: phase5-build-signed-put-request -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-domain/src/file.rs#L616 -->
 
 - 文件分片入口 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase5-plan-multipart">plan_multipart</code> 根据文件大小和 part size 生成稳定分片列表，并拒绝空文件名和零分片大小。
-<!-- code-ref: phase5-plan-multipart -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-domain/src/file.rs#L76 -->
+<!-- code-ref: phase5-plan-multipart -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-domain/src/file.rs#L422 -->
 
 - 断点续传入口 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase5-resume-plan">resume_plan</code> 根据已上传分片号恢复上传状态。
-<!-- code-ref: phase5-resume-plan -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-domain/src/file.rs#L107 -->
+<!-- code-ref: phase5-resume-plan -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-domain/src/file.rs#L515 -->
 
 - 上传状态推进由 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase5-mark-uploaded">mark_uploaded</code> 负责，未知分片号会返回参数错误，避免进度被错误推进。
-<!-- code-ref: phase5-mark-uploaded -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-domain/src/file.rs#L118 -->
+<!-- code-ref: phase5-mark-uploaded -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-domain/src/file.rs#L526 -->
 
-- 文件上传执行边界通过 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase5-file-upload-client">FileUploadClient</code> 固定，真实 HTTP 客户端后续只需要实现 upload_part。
-<!-- code-ref: phase5-file-upload-client -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-domain/src/file.rs#L69 -->
+- 文件上传执行边界通过 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase5-file-upload-client">FileUploadClient</code> 固定，真实或 mock 上传客户端只需要实现 upload_part。
+<!-- code-ref: phase5-file-upload-client -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-domain/src/file.rs#L276 -->
 
 - 缺失分片上传由 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase5-upload-missing-parts">upload_missing_parts</code> 执行，会跳过已恢复分片、校验回包 part number，并在每个分片成功后推进本地进度。
-<!-- code-ref: phase5-upload-missing-parts -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-domain/src/file.rs#L132 -->
+<!-- code-ref: phase5-upload-missing-parts -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-domain/src/file.rs#L540 -->
 
 - 上传进度由 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase5-upload-progress">progress</code> 汇总 uploaded bytes、total bytes、uploaded parts 和 total parts，并通过 UploadProgress 计算百分比和完成态。
-<!-- code-ref: phase5-upload-progress -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-domain/src/file.rs#L160 -->
+<!-- code-ref: phase5-upload-progress -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-domain/src/file.rs#L568 -->
 
 ## 验证命令
 
@@ -105,6 +134,6 @@ cargo test --workspace
 
 ## Gate 状态
 
-当前已完成：用户资料查询与更新、批量用户资料查询、用户仓储边界、好友 owner 作用域同步、黑名单 owner 作用域同步、关系仓储边界、群组同步、群成员 group 作用域同步、群组与群成员仓储边界、群删除时成员清理、文件摘要模型、分片计划、断点续传状态恢复、上传执行抽象、上传缺失分片流程、上传回包 part number 校验、上传分片状态推进、上传进度计算、领域层单元测试和全工作区回归。
+当前已完成：用户资料查询与更新、批量用户资料查询、用户仓储边界、好友 owner 作用域同步、黑名单 owner 作用域同步、关系仓储边界、群组同步、群成员 group 作用域同步、群组与群成员仓储边界、群删除时成员清理、文件摘要模型、分片计划、服务端 part limit 规则、对象名 login user 作用域、initiate 和 complete 请求契约、对象存储 API 边界、签名分片请求构建、签名缺失时批量续签、断点续传状态恢复、上传执行抽象、上传缺失分片流程、上传回包 part number 校验、上传分片状态推进、上传进度计算、领域层单元测试和全工作区回归。
 
-当前未纳入 Phase 5 领域层完成声明：真实 OpenIM server 兼容收发、真实上传 HTTP 端点凭据与端到端执行、SQLite 与 IndexedDB 具体表结构适配、Session 生命周期装配、监听器回调派发。这些能力需要在 Phase 6 及后续真实集成 Gate 中继续验证。
+当前未纳入 Phase 5 领域层完成声明：真实 OpenIM server 兼容收发、真实上传 HTTP 端点端到端执行、SQLite 与 IndexedDB 具体表结构适配、Session 生命周期装配、监听器回调派发。这些能力需要在 Phase 6 及后续真实集成 Gate 中继续验证。
