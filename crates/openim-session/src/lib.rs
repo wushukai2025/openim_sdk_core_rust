@@ -150,8 +150,14 @@ pub enum SessionEvent {
     NewMessages {
         messages: Vec<ChatMessage>,
     },
+    NewConversations {
+        conversations: Vec<ConversationInfo>,
+    },
     ConversationChanged {
         conversations: Vec<ConversationInfo>,
+    },
+    TotalUnreadCountChanged {
+        total_unread_count: u32,
     },
 }
 
@@ -322,6 +328,13 @@ pub struct DomainServices {
 pub struct TaskInfo {
     pub name: String,
     pub running: bool,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct ConversationDispatchBatch {
+    new_conversations: Vec<ConversationInfo>,
+    changed_conversations: Vec<ConversationInfo>,
+    total_unread_count: Option<u32>,
 }
 
 #[derive(Debug, Default)]
@@ -645,6 +658,20 @@ impl OpenImSession {
         Ok(())
     }
 
+    pub fn dispatch_new_conversations(&self, conversations: Vec<ConversationInfo>) -> Result<()> {
+        self.ensure_logged_in()?;
+        if !conversations.is_empty() {
+            self.emit(SessionEvent::NewConversations { conversations });
+        }
+        Ok(())
+    }
+
+    pub fn dispatch_total_unread_count_changed(&self, total_unread_count: u32) -> Result<()> {
+        self.ensure_logged_in()?;
+        self.emit(SessionEvent::TotalUnreadCountChanged { total_unread_count });
+        Ok(())
+    }
+
     pub fn send_message(
         &mut self,
         message: ChatMessage,
@@ -656,7 +683,7 @@ impl OpenImSession {
         let sent = self.domains.messages.send_message(message, sender)?;
         let conversations =
             self.apply_messages_to_conversations(&owner_user_id, &[sent.clone()])?;
-        self.dispatch_conversation_changed(conversations)?;
+        self.dispatch_conversation_events(conversations)?;
         Ok(sent)
     }
 
@@ -681,7 +708,7 @@ impl OpenImSession {
             .sync_message_range(conversation_id, messages.clone())?;
         let conversations = self.apply_messages_to_conversations(&owner_user_id, &messages)?;
         self.dispatch_new_messages(messages.clone())?;
-        self.dispatch_conversation_changed(conversations)?;
+        self.dispatch_conversation_events(conversations)?;
         Ok(messages)
     }
 
@@ -703,7 +730,7 @@ impl OpenImSession {
 
         let conversations = self.apply_messages_to_conversations(&owner_user_id, &received)?;
         self.dispatch_new_messages(received.clone())?;
-        self.dispatch_conversation_changed(conversations)?;
+        self.dispatch_conversation_events(conversations)?;
         Ok(received)
     }
 
@@ -764,20 +791,58 @@ impl OpenImSession {
         self.listeners.emit(&event);
     }
 
+    fn dispatch_conversation_events(&self, batch: ConversationDispatchBatch) -> Result<()> {
+        self.dispatch_new_conversations(batch.new_conversations)?;
+        self.dispatch_conversation_changed(batch.changed_conversations)?;
+        if let Some(total_unread_count) = batch.total_unread_count {
+            self.dispatch_total_unread_count_changed(total_unread_count)?;
+        }
+        Ok(())
+    }
+
     fn apply_messages_to_conversations(
         &mut self,
         owner_user_id: &str,
         messages: &[ChatMessage],
-    ) -> Result<Vec<ConversationInfo>> {
+    ) -> Result<ConversationDispatchBatch> {
+        let previous_total_unread = self
+            .domains
+            .conversations
+            .total_unread_count(owner_user_id)?;
+        let mut new_conversations = BTreeMap::<String, ConversationInfo>::new();
         let mut changed = BTreeMap::<String, ConversationInfo>::new();
         for message in messages {
+            let existed = self
+                .domains
+                .conversations
+                .get_conversation(owner_user_id, &message.conversation_id)?
+                .is_some();
             let conversation = self
                 .domains
                 .conversations
                 .apply_message(owner_user_id, message)?;
-            changed.insert(conversation.conversation_id.clone(), conversation);
+            let conversation_id = conversation.conversation_id.clone();
+            if existed {
+                if new_conversations.contains_key(&conversation_id) {
+                    new_conversations.insert(conversation_id, conversation);
+                } else {
+                    changed.insert(conversation_id, conversation);
+                }
+            } else {
+                changed.remove(&conversation_id);
+                new_conversations.insert(conversation_id, conversation);
+            }
         }
-        Ok(changed.into_values().collect())
+        let total_unread_count = self
+            .domains
+            .conversations
+            .total_unread_count(owner_user_id)?;
+        Ok(ConversationDispatchBatch {
+            new_conversations: new_conversations.into_values().collect(),
+            changed_conversations: changed.into_values().collect(),
+            total_unread_count: (total_unread_count != previous_total_unread)
+                .then_some(total_unread_count),
+        })
     }
 
     fn logged_in_user_id(&self) -> Result<UserId> {
@@ -1014,6 +1079,8 @@ mod tests {
         });
 
         assert!(session.dispatch_new_messages(Vec::new()).is_err());
+        assert!(session.dispatch_new_conversations(Vec::new()).is_err());
+        assert!(session.dispatch_total_unread_count_changed(0).is_err());
 
         session.init().unwrap();
         session.login(credentials()).unwrap();
@@ -1026,16 +1093,26 @@ mod tests {
             .dispatch_new_messages(vec![message.clone()])
             .unwrap();
         session
+            .dispatch_new_conversations(vec![conversation.clone()])
+            .unwrap();
+        session
             .dispatch_conversation_changed(vec![conversation.clone()])
             .unwrap();
+        session.dispatch_total_unread_count_changed(1).unwrap();
         session.dispatch_new_messages(Vec::new()).unwrap();
 
         let events = events.lock().unwrap();
         assert!(events.contains(&SessionEvent::NewMessages {
             messages: vec![message],
         }));
+        assert!(events.contains(&SessionEvent::NewConversations {
+            conversations: vec![conversation.clone()],
+        }));
         assert!(events.contains(&SessionEvent::ConversationChanged {
             conversations: vec![conversation],
+        }));
+        assert!(events.contains(&SessionEvent::TotalUnreadCountChanged {
+            total_unread_count: 1,
         }));
         assert_eq!(
             events
@@ -1161,10 +1238,30 @@ mod tests {
         assert_eq!(
             events
                 .iter()
+                .filter(|event| matches!(event, SessionEvent::NewConversations { .. }))
+                .count(),
+            1
+        );
+        assert_eq!(
+            events
+                .iter()
                 .filter(|event| matches!(event, SessionEvent::ConversationChanged { .. }))
                 .count(),
-            3
+            2
         );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, SessionEvent::TotalUnreadCountChanged { .. }))
+                .count(),
+            2
+        );
+        assert!(events.contains(&SessionEvent::TotalUnreadCountChanged {
+            total_unread_count: 1,
+        }));
+        assert!(events.contains(&SessionEvent::TotalUnreadCountChanged {
+            total_unread_count: 2,
+        }));
     }
 
     #[test]

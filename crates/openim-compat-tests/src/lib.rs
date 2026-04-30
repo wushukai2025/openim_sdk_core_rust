@@ -442,11 +442,25 @@ pub fn session_event_listener_mappings() -> &'static [SessionEventListenerMappin
             wrapper_policy: "fan_out_each_message",
         },
         SessionEventListenerMapping {
+            session_event: "newConversations",
+            go_listener: "OnConversationListener",
+            go_method: "OnNewConversation",
+            payload_key: "conversations",
+            wrapper_policy: "pass_conversation_list_json",
+        },
+        SessionEventListenerMapping {
             session_event: "conversationChanged",
             go_listener: "OnConversationListener",
             go_method: "OnConversationChanged",
             payload_key: "conversations",
             wrapper_policy: "pass_conversation_list_json",
+        },
+        SessionEventListenerMapping {
+            session_event: "totalUnreadCountChanged",
+            go_listener: "OnConversationListener",
+            go_method: "OnTotalUnreadMessageCountChanged",
+            payload_key: "totalUnreadCount",
+            wrapper_policy: "pass_total_unread_count",
         },
     ]
 }
@@ -828,11 +842,27 @@ mod tests {
         );
         assert_session_event_mapping(
             mappings,
+            "newConversations",
+            "OnConversationListener",
+            "OnNewConversation",
+            "conversations",
+            "pass_conversation_list_json",
+        );
+        assert_session_event_mapping(
+            mappings,
             "conversationChanged",
             "OnConversationListener",
             "OnConversationChanged",
             "conversations",
             "pass_conversation_list_json",
+        );
+        assert_session_event_mapping(
+            mappings,
+            "totalUnreadCountChanged",
+            "OnConversationListener",
+            "OnTotalUnreadMessageCountChanged",
+            "totalUnreadCount",
+            "pass_total_unread_count",
         );
     }
 

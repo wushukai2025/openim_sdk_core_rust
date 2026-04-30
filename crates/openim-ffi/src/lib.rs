@@ -263,7 +263,9 @@ fn session_event_name(event: &SessionEvent) -> &'static str {
         SessionEvent::ResourceOpened { .. } => "resourceOpened",
         SessionEvent::ResourceClosed { .. } => "resourceClosed",
         SessionEvent::NewMessages { .. } => "newMessages",
+        SessionEvent::NewConversations { .. } => "newConversations",
         SessionEvent::ConversationChanged { .. } => "conversationChanged",
+        SessionEvent::TotalUnreadCountChanged { .. } => "totalUnreadCountChanged",
     }
 }
 
@@ -285,8 +287,14 @@ fn session_event_payload_json(event: &SessionEvent) -> String {
             json!({ "kind": resource_kind_name(*kind), "name": name }).to_string()
         }
         SessionEvent::NewMessages { messages } => json!({ "messages": messages }).to_string(),
+        SessionEvent::NewConversations { conversations } => {
+            json!({ "conversations": conversations }).to_string()
+        }
         SessionEvent::ConversationChanged { conversations } => {
             json!({ "conversations": conversations }).to_string()
+        }
+        SessionEvent::TotalUnreadCountChanged { total_unread_count } => {
+            json!({ "totalUnreadCount": total_unread_count }).to_string()
         }
     }
 }
@@ -509,6 +517,41 @@ mod tests {
         let login_payload: serde_json::Value = serde_json::from_str(&events[6].1).unwrap();
         assert_eq!(login_payload["userId"], "u1");
         assert!(!event_names.contains(&"uninitialized"));
+    }
+
+    #[test]
+    fn session_event_name_and_payload_cover_conversation_derived_events() {
+        assert_eq!(
+            session_event_name(&SessionEvent::NewConversations {
+                conversations: Vec::new(),
+            }),
+            "newConversations"
+        );
+        assert_eq!(
+            session_event_name(&SessionEvent::TotalUnreadCountChanged {
+                total_unread_count: 2,
+            }),
+            "totalUnreadCountChanged"
+        );
+
+        let new_conversations_payload: serde_json::Value = serde_json::from_str(
+            &session_event_payload_json(&SessionEvent::NewConversations {
+                conversations: Vec::new(),
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            new_conversations_payload["conversations"],
+            serde_json::json!([])
+        );
+
+        let unread_payload: serde_json::Value = serde_json::from_str(&session_event_payload_json(
+            &SessionEvent::TotalUnreadCountChanged {
+                total_unread_count: 2,
+            },
+        ))
+        .unwrap();
+        assert_eq!(unread_payload["totalUnreadCount"], 2);
     }
 
     #[test]
