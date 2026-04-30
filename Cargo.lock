@@ -801,6 +801,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "openim-ffi"
+version = "0.1.0"
+dependencies = [
+ "openim-session",
+ "openim-types",
+]
+
+[[package]]
 name = "openim-protocol"
 version = "0.1.0"
 dependencies = [
@@ -938,6 +946,15 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "openim-wasm"
+version = "0.1.0"
+dependencies = [
+ "openim-session",
+ "openim-types",
+ "wasm-bindgen",
 ]
 
 [[package]]
