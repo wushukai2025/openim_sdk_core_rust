@@ -15,9 +15,9 @@ a:has(code[data-code-ref]) {
 
 ## 结论
 
-V2 从“Phase 7 离线核心边界已具备”继续推进到“可替换跨平台 SDK”。当前优先级不是继续扩写离线领域模型，而是补齐契约冻结、真实服务端联调、真实资源装配、绑定层产物和双栈验证。所有真实服务端相关 Gate 都必须使用有效 OpenIM 服务端地址、账号、token、上传端点和可触发推送的测试场景验证，不能由本地 fixture 冒充完成。
+V2 从“Phase 7 离线核心边界已具备”继续推进到“可替换跨平台 SDK”。当前优先级不是继续扩写离线领域模型，而是先收敛到 macOS 桌面平台跑通：优先完成 macOS 下的 native 资源装配、C ABI 产物、desktop C 示例构建运行、真实服务端 Init/Login/Logout/UnInit 生命周期和基础消息链路验证。iOS、Android、Web、wasm 平台工程、包装产物发布和双栈替换先暂停。所有真实服务端相关 Gate 都必须使用有效 OpenIM 服务端地址、账号、token、上传端点和可触发推送的测试场景验证，不能由本地 fixture 冒充完成。
 
-当前仓库的 Rust workspace 已落地核心 crate 列表；兼容测试 crate 已在 R2-00 继续补齐，并已具备 Go SDK 源码级 public API/listener surface 自动抽取、replay transcript 校验入口、绑定回调命名/线程语义冻结、replay-capture transcript 采集工具、Rust 本地 session lifecycle 采集入口、Rust 真实 transport probe 采集入口、Go SDK 真实场景回放 harness 源码入口、Go harness 本地编译检查和真实 Gate 就绪检查入口。由于暂时没有真实环境，Phase 0 本地骨架先告一段落，真实回放转为外部 Gate 暂挂；R2-04 已继续推进 native Session 资源句柄闭环；R2-03 已补齐本地可测的对象上传 API、签名 PUT 请求和 mock 上传边界；R2-06 已补 Session 内本地 fake transport 发送、拉取、推送和会话更新闭环；R2-08 已补原生 C ABI 和 wasm 导出 crate 骨架；R2-09 已补 desktop C、iOS Swift、Android Kotlin/JNI、Web TypeScript 生命周期示例源码、通用 session event listener 桥接、Android listener 示例桥接、已实现 Session event 到 Go 细分 listener 的映射种子和示例 API 漂移检查。真实上传端点、真实消息端到端执行、真实平台工程构建/打包、Go SDK 细分 listener 全量映射和双栈替换仍是外部 Gate。
+当前仓库的 Rust workspace 已落地核心 crate 列表；兼容测试 crate 已在 R2-00 继续补齐，并已具备 Go SDK 源码级 public API/listener surface 自动抽取、replay transcript 校验入口、绑定回调命名/线程语义冻结、replay-capture transcript 采集工具、Rust 本地 session lifecycle 采集入口、Rust 真实 transport probe 采集入口、Go SDK 真实场景回放 harness 源码入口、Go harness 本地编译检查和真实 Gate 就绪检查入口。由于暂时没有真实环境，Phase 0 本地骨架先告一段落，真实回放转为外部 Gate 暂挂；R2-04 已继续推进 native Session 资源句柄闭环；R2-03 已补齐本地可测的对象上传 API、签名 PUT 请求和 mock 上传边界；R2-06 已补 Session 内本地 fake transport 发送、拉取、推送和会话更新闭环；R2-08 已补原生 C ABI 和 wasm 导出 crate 骨架；R2-09 已补 desktop C、iOS Swift、Android Kotlin/JNI、Web TypeScript 生命周期示例源码、通用 session event listener 桥接、Android listener 示例桥接、已实现 Session event 到 Go 细分 listener 的映射种子和示例 API 漂移检查。下一轮只推进 macOS 桌面平台真实构建运行和真实服务端验证；其他平台、真实上传端点、Go SDK 细分 listener 全量映射和双栈替换暂不推进。
 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="v2-workspace-members">workspace members</code>
 <!-- code-ref: v2-workspace-members -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/Cargo.toml#L2 -->
 
@@ -45,16 +45,16 @@ V2 从“Phase 7 离线核心边界已具备”继续推进到“可替换跨平
 | 编号 | 阶段 | 状态 | 剩余任务 | 完成标准 |
 | --- | --- | --- | --- | --- |
 | R2-00 | Phase 0 | 外部 Gate 暂挂 | 已补契约冻结报告、Golden Fixture、兼容测试骨架、Go SDK 源码级 public API/listener surface 自动抽取、replay transcript 校验入口、绑定回调命名/线程语义冻结、replay-capture 工具、Rust 本地 session lifecycle 采集入口、Rust 真实 transport probe 采集入口、Go SDK 真实场景回放 harness 源码入口、Go harness 本地编译检查和真实 Gate 就绪检查入口；真实 Go SDK harness 执行、真实服务端 Golden Event 和 Rust 真实服务端完整同场景采集等待真实环境 | 本地源码抽取、fixture 校验、transcript validator、绑定回调契约、采集工具、Go harness 本地编译和 real gate readiness 检查通过；后续有真实环境后扩成真实运行回放契约冻结 |
-| R2-01 | Phase 1 | 外部 Gate | 用真实 OpenIM 服务端完成登录、请求响应和推送收包 | 真实账号下协议 POC 命令通过并更新报告 |
-| R2-02 | Phase 4 | 外部 Gate | 真实服务端 native 和 wasm 兼容收发、前后台切换验证 | ignored 真实服务端测试被实际执行并留存结果 |
+| R2-01 | Phase 1 | macOS 优先 Gate | 先在 macOS 真实 OpenIM 服务端环境完成登录、请求响应和推送收包；其他平台暂不推进 | macOS 真实账号下协议 POC 命令通过并更新报告 |
+| R2-02 | Phase 4 | macOS 优先 Gate | 先验证 macOS native 真实服务端兼容收发；wasm 和移动端前后台切换暂停 | macOS native ignored 真实服务端测试被实际执行并留存结果 |
 | R2-03 | Phase 5 | 本地已推进，外部 Gate 暂挂 | 已补对象上传 API 边界、上传凭据流程、签名分片 PUT 请求和 mock 上传验证；真实 HTTP 上传端点端到端执行等待真实环境 | 本地 mock 覆盖端点语义并通过 openim-domain 测试，真实端点再做端到端上传 |
 | R2-04 | Phase 6 | 本地已推进 | 已接入 SessionRuntimeResources、ResourceOpened/ResourceClosed 事件和 native Session resource adapter；native 登录会打开 SQLite storage、执行迁移，并挂接 transport/sync 任务句柄；wasm IndexedDB 运行时装配和真实 WebSocket 长连接任务仍待后续 Gate | Session 登录会创建资源句柄，并能在 Logout 和 UnInit 清理；native SQLite 打开和迁移已有单元测试覆盖 |
-| R2-05 | Phase 6 | 外部 Gate | 登录接口 HTTP 校验、平台线程切换、前后台生命周期回归 | iOS、Android、Web 或桌面最小场景可复现 |
+| R2-05 | Phase 6 | macOS 优先 Gate | 先完成 macOS desktop 登录接口 HTTP 校验、回调线程策略和生命周期回归；iOS、Android、Web 暂停 | macOS desktop 最小场景可复现并留存命令、环境变量和结果 |
 | R2-06 | Phase 7 | 本地已推进，外部 Gate 暂挂 | 已串联上传结果、SendMsg、PullMsg、推送消息和本地会话更新；真实账号端到端联调等待真实环境 | 本地 fake transport 闭环已通过 openim-session 测试，真实账号再端到端联调 |
 | R2-07 | Phase 7 | 外部 Gate | 撤回和已读回执 HTTP API 服务端校验 | 服务端状态、对端回调和本地状态三者一致 |
 | R2-08 | Phase 8 | 本地已推进 | 已创建原生 C ABI 和 wasm 导出 crate 骨架，覆盖句柄模型和基础生命周期 API | openim-ffi 和 openim-wasm 可编译，基础生命周期测试和 wasm32 check 通过 |
-| R2-09 | Phase 8 | 本地示例和通用回调桥接已推进，平台 Gate 暂挂 | 已补 desktop C、iOS Swift、Android Kotlin/JNI、Web TypeScript 生命周期示例源码、通用 session event listener 注册/注销、Android listener 示例桥接和已实现 Session event 到 Go 细分 listener 的映射种子；真实平台工程构建、打包、包装产物和 Go SDK 细分 listener 全量映射仍待平台环境 | 示例源码覆盖 listener 注册、Init、Login、Logout、UnInit 和 listener 注销，并由本地测试防漂移；真实平台工程需在 iOS、Android、桌面和 Web 环境构建验证 |
-| R2-10 | Phase 9 | 外部 Gate | 建立 Go 与 Rust 双栈对比报告和差异清单 | 核心场景有对比结果、已知差异、灰度和回滚方案 |
+| R2-09 | Phase 8 | macOS 优先 Gate | 已补 desktop C、iOS Swift、Android Kotlin/JNI、Web TypeScript 生命周期示例源码、通用 session event listener 注册/注销、Android listener 示例桥接和已实现 Session event 到 Go 细分 listener 的映射种子；下一步只构建并运行 macOS desktop C 示例，iOS、Android、Web 包装产物暂停 | macOS desktop C 示例能链接本地 openim-ffi 产物并跑通 listener 注册、Init、Login、Logout、UnInit、listener 注销；其他平台不纳入本轮验收 |
+| R2-10 | Phase 9 | 暂停 | Go 与 Rust 双栈对比报告和灰度替换方案等待 macOS 单平台跑通后再恢复 | macOS 单平台真实 Gate 通过后重新拆分双栈对比范围 |
 
 ## 现有未完成 Gate 引用
 
@@ -137,13 +137,16 @@ V2 从“Phase 7 离线核心边界已具备”继续推进到“可替换跨平
 
 ## 本地优先执行顺序
 
-1. Phase 0 真实回放契约暂挂到外部 Gate；后续有真实环境后再执行 Go harness 真实运行、真实服务端 Golden Event 和 Rust 完整同场景采集。
-2. Session native 资源适配器已落地，现有资源句柄边界通过 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="v2-session-runtime-resources">SessionRuntimeResources</code> 持有并清理。
+1. 先跑通 macOS desktop C 示例：构建 openim-ffi macOS 产物，编译 desktop C 示例，使用真实 OpenIM 环境执行 listener 注册、Init、Login、Logout、UnInit 和 listener 注销。
+2. 在 macOS native 上补真实服务端协议与 transport 验证：登录、GetNewestSeq、至少一种推送或可复现的收包场景；wasm、iOS、Android 暂停。
+3. macOS 跑通后再更新 Phase 8 报告和本清单，明确命令、环境变量、产物路径、真实服务端结果和剩余风险。
+4. Phase 0 真实回放契约仍暂挂；除非 macOS 单平台需要对照 Go SDK，否则不恢复全量 Go/Rust 双栈回放。
+5. Session native 资源适配器已落地，现有资源句柄边界通过 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="v2-session-runtime-resources">SessionRuntimeResources</code> 持有并清理。
    <!-- code-ref: v2-session-runtime-resources -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-session/src/lib.rs#L216 -->
-3. 文件 HTTP 上传客户端边界已推进到可 mock 验证，当前领域层已有 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="v2-file-upload-boundary">FileUploadClient</code> 和签名 PUT 请求边界；真实 endpoint 后续跟随外部 Gate 验证。
+6. 文件 HTTP 上传客户端边界已推进到可 mock 验证，当前领域层已有 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="v2-file-upload-boundary">FileUploadClient</code> 和签名 PUT 请求边界；真实 endpoint 本轮暂停，除非 macOS 端到端消息发送必须依赖真实上传。
    <!-- code-ref: v2-file-upload-boundary -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-domain/src/file.rs#L276 -->
-4. 本地 fake transport 的消息发送、拉取、推送闭环已落地，Phase 7 已从单服务边界推进到 Session 内链路闭环。
-5. 平台示例源码骨架、通用 session event listener 桥接、Android listener 示例桥接和已实现 Session event 到 Go 细分 listener 的映射种子已落地，下一步进入真实平台构建/打包、Go SDK 细分 listener 全量映射与双栈验证。平台示例必须后续在 iOS、Android、Web 和桌面环境单独验证，不能用绑定 crate 单元测试替代。
+7. 本地 fake transport 的消息发送、拉取、推送闭环已落地，Phase 7 已从单服务边界推进到 Session 内链路闭环。
+8. 平台示例源码骨架、通用 session event listener 桥接、Android listener 示例桥接和已实现 Session event 到 Go 细分 listener 的映射种子已落地；除 macOS desktop C 示例外，iOS、Android、Web 平台工程构建和包装产物先暂停。
 
 ## 外部环境需求
 
@@ -152,8 +155,9 @@ V2 从“Phase 7 离线核心边界已具备”继续推进到“可替换跨平
 - 真实 OpenIM WebSocket 地址、HTTP API 地址、userID、token 和平台 ID。
 - 可触发服务端推送的测试账号或自动化触发脚本。
 - 图片和文件上传所需的真实凭据、签名或上传 endpoint。
-- iOS、Android、Web、桌面示例工程构建环境。
-- Go SDK 与 Rust SDK 同场景运行的双栈测试环境。
+- macOS 桌面 C 示例构建环境：clang、可链接的 openim-ffi macOS 动态或静态库、真实 OpenIM 服务端环境变量。
+- iOS、Android、Web、wasm 示例工程构建环境暂不需要，本轮暂停。
+- Go SDK 与 Rust SDK 同场景运行的双栈测试环境暂不需要，本轮暂停。
 
 ## V2 本轮验收口径
 
@@ -164,13 +168,13 @@ V2 从“Phase 7 离线核心边界已具备”继续推进到“可替换跨平
 - 新增 Phase 5 对象上传 API、签名 PUT 请求和 mock 上传验证。
 - 新增 Phase 7 Session 内本地 fake transport 消息发送、拉取、推送和会话更新闭环。
 - 新增 Phase 8 原生 C ABI 和 wasm 导出 crate 骨架、句柄模型和基础生命周期 API。
-- 新增 Phase 8 平台示例源码骨架、通用 session event listener 桥接、Android listener 示例桥接、已实现 Session event 到 Go 细分 listener 的映射种子和示例 API 漂移检查，覆盖 desktop C、iOS Swift、Android Kotlin/JNI 和 Web TypeScript 生命周期调用。
+- 新增 Phase 8 平台示例源码骨架、通用 session event listener 桥接、Android listener 示例桥接、已实现 Session event 到 Go 细分 listener 的映射种子和示例 API 漂移检查；下一轮验收只覆盖 macOS desktop C 示例真实构建运行。
 - 保持 Rust workspace 检查通过。
 
 本轮不能宣称完成以下项：
 
 - 真实服务端协议 Gate。
 - 真实上传端到端 Gate。
-- 真实平台示例构建、打包和交付 Gate。
+- 非 macOS 平台示例构建、打包和交付 Gate。
 - Go SDK 细分 listener 全量映射和平台包装层派发 Gate。
 - Go 与 Rust 双栈替换 Gate。
