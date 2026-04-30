@@ -15,7 +15,7 @@ a:has(code[data-code-ref]) {
 
 ## 结论
 
-Phase 8 已先落地可本地编译的绑定层骨架：原生 C ABI crate、wasm-bindgen crate、句柄模型和基础生命周期 API 已进入 workspace，并通过本地单元测试。当前仍不冒充平台交付：iOS、Android、桌面和 Web 示例工程，真实平台打包产物，监听器完整回调派发和真实服务端端到端验证仍属于后续 Gate。
+Phase 8 已先落地可本地编译的绑定层骨架：原生 C ABI crate、wasm-bindgen crate、句柄模型、基础生命周期 API、C header、desktop C、iOS Swift、Android Kotlin/JNI 和 Web TypeScript 生命周期示例源码已进入 workspace，并通过本地单元测试覆盖示例 API 漂移。当前仍不冒充平台交付：真实平台工程构建、真实平台打包产物、监听器完整回调派发和真实服务端端到端验证仍属于后续 Gate。
 
 ## Rust 落地点
 
@@ -57,6 +57,26 @@ Phase 8 已先落地可本地编译的绑定层骨架：原生 C ABI crate、was
 <!-- code-ref: phase8-ffi-lifecycle-test -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-ffi/src/lib.rs#L186 -->
 <!-- code-ref: phase8-wasm-lifecycle-test -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-wasm/src/lib.rs#L76 -->
 
+- C ABI 对外声明已补 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase8-ffi-header">openim_ffi.h</code>，固定平台 ID、错误码、opaque handle 和 Init/Login/Logout/UnInit 函数签名。
+<!-- code-ref: phase8-ffi-header -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-ffi/include/openim_ffi.h#L1 -->
+
+- desktop 示例源码 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase8-desktop-example">openim_desktop_lifecycle.c</code> 直接调用 C ABI，覆盖 create、init、login、logout、uninit、destroy 和 last error。
+<!-- code-ref: phase8-desktop-example -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/examples/desktop-c/openim_desktop_lifecycle.c#L1 -->
+
+- iOS 示例源码 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase8-ios-example">OpenIMLifecycleExample.swift</code> 通过 bridging header 使用 C ABI，并在 deinit 中清理 session handle。
+<!-- code-ref: phase8-ios-example -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/examples/ios-swift/OpenIMLifecycleExample.swift#L8 -->
+
+- Android 示例源码由 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase8-android-kotlin-example">OpenIMLifecycleExample.kt</code> 和 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase8-android-jni-example">openim_jni_lifecycle.cc</code> 组成，Kotlin 侧走 external 方法，JNI 侧转发到 C ABI。
+<!-- code-ref: phase8-android-kotlin-example -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/examples/android-kotlin/OpenIMLifecycleExample.kt#L3 -->
+<!-- code-ref: phase8-android-jni-example -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/examples/android-kotlin/openim_jni_lifecycle.cc#L1 -->
+
+- Web 示例源码 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase8-web-example">openim_lifecycle.ts</code> 使用 wasm-bindgen 生成的 OpenImWasmSession，覆盖 init、login、logout、uninit 和 stateCode。
+<!-- code-ref: phase8-web-example -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/examples/web/openim_lifecycle.ts#L1 -->
+
+- 示例 API 漂移检查已进入单元测试：<code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase8-native-example-test">native_header_and_examples_cover_lifecycle_exports</code> 校验 C header、desktop、iOS 和 Android 示例，<code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="phase8-web-example-test">web_example_uses_wasm_lifecycle_exports</code> 校验 Web 示例。
+<!-- code-ref: phase8-native-example-test -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-ffi/src/lib.rs#L277 -->
+<!-- code-ref: phase8-web-example-test -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-wasm/src/lib.rs#L105 -->
+
 ## 验证命令
 
 ```bash
@@ -85,6 +105,6 @@ cargo test --workspace
 
 ## Gate 状态
 
-当前已完成：C ABI crate 骨架、wasm-bindgen crate 骨架、opaque 句柄模型、基础生命周期 API、状态码读取、last error 读取、native 和 wasm 回调线程策略常量、本地 C ABI 单元测试、本地 wasm 单元测试、wasm32 编译检查和 workspace 回归。
+当前已完成：C ABI crate 骨架、wasm-bindgen crate 骨架、opaque 句柄模型、基础生命周期 API、状态码读取、last error 读取、native 和 wasm 回调线程策略常量、C header、desktop C 示例源码、iOS Swift 示例源码、Android Kotlin/JNI 示例源码、Web TypeScript 示例源码、本地 C ABI 单元测试、本地 wasm 单元测试、示例 API 漂移检查、wasm32 编译检查和 workspace 回归。
 
-当前未完成：iOS、Android、桌面和 Web 示例工程；C header、Swift/Kotlin/TypeScript 包装产物；完整 listener 注册和回调派发；真实平台线程切换；真实服务端 Init、Login、Logout、UnInit 端到端验证。这些能力继续留在 R2-09 和后续平台 Gate。
+当前未完成：iOS、Android、桌面和 Web 示例工程的真实平台构建；Swift/Kotlin/TypeScript 包装产物发布；完整 listener 注册和回调派发；真实平台线程切换；真实服务端 Init、Login、Logout、UnInit 端到端验证。这些能力继续留在 R2-09 平台 Gate 和后续真实集成 Gate。
