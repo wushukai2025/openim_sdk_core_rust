@@ -17,7 +17,7 @@ a:has(code[data-code-ref]) {
 
 V2 从“Phase 7 离线核心边界已具备”继续推进到“可替换跨平台 SDK”。当前优先级不是继续扩写离线领域模型，而是补齐契约冻结、真实服务端联调、真实资源装配、绑定层产物和双栈验证。所有真实服务端相关 Gate 都必须使用有效 OpenIM 服务端地址、账号、token、上传端点和可触发推送的测试场景验证，不能由本地 fixture 冒充完成。
 
-当前仓库的 Rust workspace 已落地核心 crate 列表；绑定层尚未落地，兼容测试 crate 已在 R2-00 继续补齐，并已具备 Go SDK 源码级 public API/listener surface 自动抽取、replay transcript 校验入口、绑定回调命名/线程语义冻结、replay-capture transcript 采集工具、Rust 本地 session lifecycle 采集入口、Rust 真实 transport probe 采集入口、Go SDK 真实场景回放 harness 源码入口、Go harness 本地编译检查和真实 Gate 就绪检查入口。
+当前仓库的 Rust workspace 已落地核心 crate 列表；绑定层尚未落地，兼容测试 crate 已在 R2-00 继续补齐，并已具备 Go SDK 源码级 public API/listener surface 自动抽取、replay transcript 校验入口、绑定回调命名/线程语义冻结、replay-capture transcript 采集工具、Rust 本地 session lifecycle 采集入口、Rust 真实 transport probe 采集入口、Go SDK 真实场景回放 harness 源码入口、Go harness 本地编译检查和真实 Gate 就绪检查入口。由于暂时没有真实环境，Phase 0 本地骨架先告一段落，真实回放转为外部 Gate 暂挂；R2-04 已继续推进 native Session 资源句柄闭环。
 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="v2-workspace-members">workspace members</code>
 <!-- code-ref: v2-workspace-members -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/Cargo.toml#L2 -->
 
@@ -44,11 +44,11 @@ V2 从“Phase 7 离线核心边界已具备”继续推进到“可替换跨平
 
 | 编号 | 阶段 | 状态 | 剩余任务 | 完成标准 |
 | --- | --- | --- | --- | --- |
-| R2-00 | Phase 0 | 本轮继续推进 | 已补契约冻结报告、Golden Fixture、兼容测试骨架、Go SDK 源码级 public API/listener surface 自动抽取、replay transcript 校验入口、绑定回调命名/线程语义冻结、replay-capture 工具、Rust 本地 session lifecycle 采集入口、Rust 真实 transport probe 采集入口、Go SDK 真实场景回放 harness 源码入口、Go harness 本地编译检查和真实 Gate 就绪检查入口；仍需补 Go SDK harness 真实执行、真实服务端 Golden Event 和 Rust 真实服务端完整同场景采集 | 先以本地源码抽取、fixture 校验、transcript validator、绑定回调契约、采集工具、Go harness 本地编译和 real gate readiness 检查通过，后续扩成真实运行回放契约冻结 |
+| R2-00 | Phase 0 | 外部 Gate 暂挂 | 已补契约冻结报告、Golden Fixture、兼容测试骨架、Go SDK 源码级 public API/listener surface 自动抽取、replay transcript 校验入口、绑定回调命名/线程语义冻结、replay-capture 工具、Rust 本地 session lifecycle 采集入口、Rust 真实 transport probe 采集入口、Go SDK 真实场景回放 harness 源码入口、Go harness 本地编译检查和真实 Gate 就绪检查入口；真实 Go SDK harness 执行、真实服务端 Golden Event 和 Rust 真实服务端完整同场景采集等待真实环境 | 本地源码抽取、fixture 校验、transcript validator、绑定回调契约、采集工具、Go harness 本地编译和 real gate readiness 检查通过；后续有真实环境后扩成真实运行回放契约冻结 |
 | R2-01 | Phase 1 | 外部 Gate | 用真实 OpenIM 服务端完成登录、请求响应和推送收包 | 真实账号下协议 POC 命令通过并更新报告 |
 | R2-02 | Phase 4 | 外部 Gate | 真实服务端 native 和 wasm 兼容收发、前后台切换验证 | ignored 真实服务端测试被实际执行并留存结果 |
 | R2-03 | Phase 5 | 可本地推进加外部 Gate | 补真实 HTTP 上传客户端边界和上传凭据流程 | 本地 mock 覆盖端点语义，真实端点再做端到端上传 |
-| R2-04 | Phase 6 | 可本地推进 | 接入真实资源装配适配器框架，打开和关闭 storage，挂接 transport 任务边界 | Session 登录会真正创建资源句柄，并能在 Logout 和 UnInit 清理 |
+| R2-04 | Phase 6 | 本地已推进 | 已接入 SessionRuntimeResources、ResourceOpened/ResourceClosed 事件和 native Session resource adapter；native 登录会打开 SQLite storage、执行迁移，并挂接 transport/sync 任务句柄；wasm IndexedDB 运行时装配和真实 WebSocket 长连接任务仍待后续 Gate | Session 登录会创建资源句柄，并能在 Logout 和 UnInit 清理；native SQLite 打开和迁移已有单元测试覆盖 |
 | R2-05 | Phase 6 | 外部 Gate | 登录接口 HTTP 校验、平台线程切换、前后台生命周期回归 | iOS、Android、Web 或桌面最小场景可复现 |
 | R2-06 | Phase 7 | 可本地推进加外部 Gate | 串联上传结果、SendMsg、PullMsg、推送消息和本地会话更新 | 本地 fake transport 先闭环，真实账号再端到端联调 |
 | R2-07 | Phase 7 | 外部 Gate | 撤回和已读回执 HTTP API 服务端校验 | 服务端状态、对端回调和本地状态三者一致 |
@@ -64,11 +64,11 @@ V2 从“Phase 7 离线核心边界已具备”继续推进到“可替换跨平
 
 - Phase 0 的 replay-capture 工具已加入 workspace，后续真实 Go/Rust 回放器可以通过 stdout JSONL 或 JSONL 文件生成标准 transcript，并用 compare 子命令执行双栈 transcript 对比。
   <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="v2-phase0-replay-capture-tool">Replay capture tool</code>
-  <!-- code-ref: v2-phase0-replay-capture-tool -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/tools/replay-capture/src/main.rs#L262 -->
+  <!-- code-ref: v2-phase0-replay-capture-tool -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/tools/replay-capture/src/main.rs#L264 -->
 
 - Phase 0 已新增真实 Gate 就绪检查入口，当前本机检查结果为 go_tool=ok，但真实 OpenIM 地址、账号、token 环境变量缺失，因此不能执行真实回放 Gate。
   <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="v2-phase0-real-gate-check">Real gate readiness check</code>
-  <!-- code-ref: v2-phase0-real-gate-check -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/tools/replay-capture/src/main.rs#L165 -->
+  <!-- code-ref: v2-phase0-real-gate-check -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/tools/replay-capture/src/main.rs#L167 -->
 
 - Phase 0 已新增 Go SDK 真实场景回放 harness 源码入口和依赖校验文件，当前本机 go test ./... 已通过；后续提供真实服务端地址、账号、token 后可输出 JSONL transcript。
   <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="v2-phase0-go-replay-harness">Go replay harness</code>
@@ -76,11 +76,11 @@ V2 从“Phase 7 离线核心边界已具备”继续推进到“可替换跨平
 
 - Phase 0 的 Rust 本地 session lifecycle 采集入口已落在 replay-capture，当前覆盖 init、login、task start/stop、logout 和 uninit。
   <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="v2-phase0-rust-session-capture">Rust session capture</code>
-  <!-- code-ref: v2-phase0-rust-session-capture -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/tools/replay-capture/src/main.rs#L326 -->
+  <!-- code-ref: v2-phase0-rust-session-capture -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/tools/replay-capture/src/main.rs#L328 -->
 
 - Phase 0 的 Rust 真实 transport probe 采集入口已落在 replay-capture，当前覆盖真实 WebSocket 连接、GetNewestSeq 请求响应和可选 PushMsg 归一化；完整 required transcript 仍等待 session 同步、文件上传和真实消息触发闭环。
   <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="v2-phase0-rust-transport-capture">Rust transport capture</code>
-  <!-- code-ref: v2-phase0-rust-transport-capture -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/tools/replay-capture/src/main.rs#L332 -->
+  <!-- code-ref: v2-phase0-rust-transport-capture -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/tools/replay-capture/src/main.rs#L334 -->
 
 - Phase 0 的源码级 surface 自动抽取落在兼容测试 crate，当前本机 Go SDK 源码存在时会冻结 134 个 open_im_sdk 导出函数和 14 个 listener interface。
   <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="v2-phase0-source-extractor">Go source contract extractor</code>
@@ -102,9 +102,9 @@ V2 从“Phase 7 离线核心边界已具备”继续推进到“可替换跨平
   <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="v2-phase4-open-gate">Phase 4 open Gate</code>
   <!-- code-ref: v2-phase4-open-gate -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/docs/phase-4-transport-layer.md#L133 -->
 
-- Phase 6 目前仍是资源装配骨架，真实 native 和 wasm transport 任务、真实 storage 打开关闭、同步任务和登录 HTTP 校验未接入。
+- Phase 6 已从资源装配骨架推进到 native 本地资源句柄闭环；真实 native WebSocket 长连接任务、wasm IndexedDB 运行时装配、同步任务和登录 HTTP 校验仍未接入。
   <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="v2-phase6-open-gate">Phase 6 open Gate</code>
-  <!-- code-ref: v2-phase6-open-gate -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/docs/phase-6-session-runtime.md#L113 -->
+  <!-- code-ref: v2-phase6-open-gate -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/docs/phase-6-session-runtime.md#L135 -->
 
 - Phase 7 已具备离线消息和会话集成边界，但真实 SendMsg、PullMsg、推送回调、上传到发送、撤回和已读回执仍未端到端完成。
   <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="v2-phase7-open-gate">Phase 7 open Gate</code>
@@ -112,10 +112,10 @@ V2 从“Phase 7 离线核心边界已具备”继续推进到“可替换跨平
 
 ## 本地优先执行顺序
 
-1. 继续补 Phase 0 真实回放契约：在现有源码级 surface 抽取、transcript validator、绑定回调契约、replay-capture 工具、Rust transport probe、Go SDK harness 源码入口和 real gate readiness 检查基础上，补 Go harness 真实执行、真实服务端 Golden Event 和 Rust 真实服务端完整同场景采集。
-2. 再补 Session 真实资源适配器框架。现有边界已经通过 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="v2-session-resource-adapter">SessionResourceAdapter</code> 留出入口。
-   <!-- code-ref: v2-session-resource-adapter -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-session/src/lib.rs#L261 -->
-3. 再补文件 HTTP 上传客户端边界。当前领域层已有 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="v2-file-upload-boundary">FileUploadClient</code>，下一步应落真实 HTTP 请求语义和 mock 验证。
+1. Phase 0 真实回放契约暂挂到外部 Gate；后续有真实环境后再执行 Go harness 真实运行、真实服务端 Golden Event 和 Rust 完整同场景采集。
+2. Session native 资源适配器已落地，现有资源句柄边界通过 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="v2-session-runtime-resources">SessionRuntimeResources</code> 持有并清理。
+   <!-- code-ref: v2-session-runtime-resources -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-session/src/lib.rs#L216 -->
+3. 下一步补文件 HTTP 上传客户端边界。当前领域层已有 <code style="background:#FFF4E5;color:#C2410C;padding:0 0.2em;border-radius:4px;" data-code-ref="v2-file-upload-boundary">FileUploadClient</code>，下一步应落真实 HTTP 请求语义和 mock 验证。
    <!-- code-ref: v2-file-upload-boundary -> file:///Volumes/ssd/Users/hj/Documents/code/github/openim/openim-sdk-core-rust/crates/openim-domain/src/file.rs#L69 -->
 4. 再补本地 fake transport 的消息发送、拉取、推送闭环，把 Phase 7 从单服务边界推进到 Session 内链路闭环。
 5. 最后进入绑定层骨架、平台示例和双栈验证。绑定层可以先做编译和生命周期 API，真实平台示例必须后续单独验证。
